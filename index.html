@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>RVTools → Excalidraw · ITQ</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="https://esm.sh/@excalidraw/excalidraw/dist/dev/index.css"/>
+<script>window.EXCALIDRAW_ASSET_PATH = "https://esm.sh/@excalidraw/excalidraw/dist/prod/";</script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18",
+    "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+    "react-dom": "https://esm.sh/react-dom@18",
+    "react-dom/client": "https://esm.sh/react-dom@18/client"
+  }
+}
+</script>
 <style>
   :root {
     --itq-orange:  #F05A28;
@@ -102,6 +114,27 @@
     vertical-align: middle; margin-right: 6px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  #preview-section {
+    width: 100%; max-width: 1300px;
+    margin-top: 32px;
+  }
+  .preview-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .preview-header h2 { font-size: 1.1rem; font-weight: 700; color: var(--itq-dark); }
+  .btn-outline {
+    padding: 8px 20px; font-size: 0.9rem; font-weight: 600;
+    background: transparent; color: var(--itq-orange);
+    border: 2px solid var(--itq-orange); border-radius: 8px;
+    cursor: pointer; transition: background .2s, color .2s;
+  }
+  .btn-outline:hover { background: var(--itq-orange); color: #fff; }
+  #excalidraw-mount {
+    height: 620px; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 2px 16px rgba(0,0,0,.10);
+    border: 1px solid var(--border);
+  }
   footer {
     margin-top: 40px; font-size: 0.8rem; color: var(--muted); text-align: center;
   }
@@ -128,6 +161,14 @@
     Generate Excalidraw Diagram
   </button>
   <div id="status"></div>
+</div>
+
+<div id="preview-section" hidden>
+  <div class="preview-header">
+    <h2>Diagram Preview</h2>
+    <button id="download-btn" class="btn-outline">Download .excalidraw</button>
+  </div>
+  <div id="excalidraw-mount"></div>
 </div>
 
 <footer>
@@ -425,18 +466,50 @@ async function generate() {
       sites.push(parseRvtools(buf, item.name || item.file.name));
     }
     const doc = generateExcalidraw(sites);
-    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = 'vmware_infrastructure.excalidraw'; a.click();
-    URL.revokeObjectURL(url);
-    status.innerHTML = '<span class="ok">✓ Diagram downloaded! Open it at excalidraw.com</span>';
+    window.__excalidrawDoc = doc;
+    document.dispatchEvent(new CustomEvent('diagram-ready'));
+    status.innerHTML = '<span class="ok">✓ Diagram ready — see preview below</span>';
   } catch (e) {
     status.innerHTML = `<span class="err">Error: ${e.message}</span>`;
   } finally {
     genBtn.disabled = false;
   }
 }
+</script>
+<script type="module">
+import React from "react";
+import { createRoot } from "react-dom/client";
+import * as ExcalidrawLib from "https://esm.sh/@excalidraw/excalidraw/dist/dev/index.js?external=react,react-dom";
+
+let root = null;
+
+document.addEventListener('diagram-ready', () => {
+  const doc = window.__excalidrawDoc;
+  const section = document.getElementById('preview-section');
+  const mount = document.getElementById('excalidraw-mount');
+
+  section.hidden = false;
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  if (root) root.unmount();
+  root = createRoot(mount);
+  root.render(React.createElement(ExcalidrawLib.Excalidraw, {
+    initialData: { elements: doc.elements, appState: doc.appState, scrollToContent: true },
+    viewModeEnabled: true,
+  }));
+});
+
+document.getElementById('download-btn').addEventListener('click', () => {
+  const doc = window.__excalidrawDoc;
+  if (!doc) return;
+  const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: 'vmware_infrastructure.excalidraw',
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
 </script>
 </body>
 </html>
