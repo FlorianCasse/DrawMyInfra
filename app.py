@@ -1,6 +1,7 @@
 """
-RVTools → Excalidraw Generator
+DrawMyInfra — VMware infrastructure → Excalidraw Generator
 Flask web app — single file, no templates directory needed.
+Supports RVTools and LiveOptics .xlsx exports.
 """
 
 import io
@@ -437,7 +438,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>RVTools → Excalidraw · ITQ</title>
+<title>DrawMyInfra</title>
 <style>
   :root {
     --itq-orange:  #F05A28;
@@ -560,16 +561,16 @@ HTML = r"""<!DOCTYPE html>
 <body>
 <header>
   <div class="logo-bar">
-    <div class="logo-box">ITQ</div>
-    <h1>RVTools <span>→ Excalidraw</span></h1>
+    <div class="logo-box">DMI</div>
+    <h1>Draw<span>MyInfra</span></h1>
   </div>
-  <p class="subtitle">Upload one or more RVTools .xlsx files — get a ready-to-open infrastructure diagram</p>
+  <p class="subtitle">Upload <strong>RVTools</strong> or <strong>LiveOptics</strong> .xlsx exports — get a ready-to-open infrastructure diagram</p>
 </header>
 
 <div class="card">
   <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
     <div class="drop-icon">📂</div>
-    <p class="drop-text">Drop your <strong>RVTools .xlsx</strong> files here<br>or <strong>click to browse</strong></p>
+    <p class="drop-text">Drop your <strong>RVTools</strong> or <strong>LiveOptics</strong> .xlsx files here<br>or <strong>click to browse</strong></p>
   </div>
   <input type="file" id="file-input" accept=".xlsx" multiple/>
 
@@ -582,7 +583,7 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <footer>
-  Built with ♥ by ITQ &nbsp;·&nbsp;
+  Built with ♥ by Florian Casse &nbsp;·&nbsp;
   Open the generated <code>.excalidraw</code> file at
   <a href="https://excalidraw.com" target="_blank">excalidraw.com</a>
 </footer>
@@ -725,5 +726,5 @@ def generate():
 if __name__ == "__main__":
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-    print(f"Starting RVTools → Excalidraw server on http://localhost:{port}")
+    print(f"Starting DrawMyInfra server on http://localhost:{port}")
     app.run(debug=False, host="0.0.0.0", port=port)
