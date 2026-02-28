@@ -183,6 +183,91 @@ def parse_rvtools(file_bytes, site_name):
     }
 
 
+def parse_liveoptics(file_bytes, site_name):
+    """Parse a LiveOptics .xlsx file → structured dict."""
+    xls = pd.ExcelFile(io.BytesIO(file_bytes))
+    sheet_names_lower = {s.lower(): s for s in xls.sheet_names}
+
+    hosts_sheet = sheet_names_lower.get("esx hosts")
+    if hosts_sheet is None:
+        raise ValueError(f"No 'ESX Hosts' sheet found in {site_name}")
+
+    hosts_df = xls.parse(hosts_sheet, header=0)
+
+    # Performance sheet for CPU/Mem %
+    perf_map = {}
+    perf_sheet = sheet_names_lower.get("esx performance")
+    if perf_sheet:
+        perf_df = xls.parse(perf_sheet, header=0)
+        for _, row in perf_df.iterrows():
+            h = safe(row.get("Host", ""))
+            if h:
+                perf_map[h] = row
+
+    # vCenter version from first host row
+    vcenter_version = ""
+    if not hosts_df.empty:
+        vc_str = safe(hosts_df.iloc[0].get("vCenter", ""))
+        m = re.search(r'(\d+\.\d+\.\d+)', vc_str)
+        if m:
+            vcenter_version = m.group(1)
+
+    hosts = []
+    for _, row in hosts_df.iterrows():
+        hostname = safe(row.get("Host Name", ""))
+        if not hostname:
+            continue
+
+        # ESXi version from OS field
+        esxi_short = ""
+        os_str = safe(row.get("OS", ""))
+        m = re.search(r'(\d+\.\d+\.\d+)', os_str)
+        if m:
+            esxi_short = m.group(1)
+
+        perf = perf_map.get(hostname, {})
+
+        def fmt_pct(v):
+            try:
+                return f"{float(v):.0f}%"
+            except Exception:
+                return str(v).strip() if v else "—"
+
+        hosts.append({
+            "hostname": hostname,
+            "cluster":  safe(row.get("Cluster", "")) or "Default",
+            "model":    safe(row.get("Model", "")),
+            "esxi":     esxi_short,
+            "vms":      safe(row.get("Guest VM Count", "")) or "0",
+            "cpu":      fmt_pct(perf.get("Average CPU %", "")),
+            "mem":      fmt_pct(perf.get("Average Memory %", "")),
+            "svc":      safe(row.get("Serial No", "")),
+        })
+
+    clusters = {}
+    for h in hosts:
+        clusters.setdefault(h["cluster"], []).append(h)
+
+    return {
+        "site_name":       site_name,
+        "clusters":        clusters,
+        "vcenter_version": vcenter_version,
+        "total_hosts":     len(hosts),
+        "total_vms":       sum(int(h["vms"]) if str(h["vms"]).isdigit() else 0 for h in hosts),
+    }
+
+
+def parse_file(file_bytes, site_name):
+    """Auto-detect RVTools vs LiveOptics and parse accordingly."""
+    xls = pd.ExcelFile(io.BytesIO(file_bytes))
+    sheets_lower = [s.lower() for s in xls.sheet_names]
+    if "vhost" in sheets_lower:
+        return parse_rvtools(file_bytes, site_name)
+    if "esx hosts" in sheets_lower:
+        return parse_liveoptics(file_bytes, site_name)
+    raise ValueError(f'"{site_name}" is not a recognised RVTools or LiveOptics export')
+
+
 # ─── Excalidraw generation ────────────────────────────────────────────────────
 def rect(id_, x, y, w, h, bg, stroke, text="", font_size=12, bold=False,
          text_color="#1A1A2E", v_align="middle", rounded=8):
@@ -614,7 +699,7 @@ def generate():
     for i, f in enumerate(uploaded):
         site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
         try:
-            data = parse_rvtools(f.read(), site_name)
+            data = parse_file(f.read(), site_name)
             sites.append(data)
         except Exception as e:
             return f"Error parsing {f.filename}: {str(e)}", 400

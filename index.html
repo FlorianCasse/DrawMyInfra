@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>RVTools → Excalidraw · ITQ</title>
+<title>VMware Infrastructure → Excalidraw</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="https://esm.sh/@excalidraw/excalidraw/dist/dev/index.css"/>
 <script>window.EXCALIDRAW_ASSET_PATH = "https://esm.sh/@excalidraw/excalidraw/dist/prod/";</script>
@@ -145,15 +145,15 @@
 <header>
   <div class="logo-bar">
     <div class="logo-box">ITQ</div>
-    <h1>RVTools <span>→ Excalidraw</span></h1>
+    <h1>VMware <span>→ Excalidraw</span></h1>
   </div>
-  <p class="subtitle">Upload one or more RVTools .xlsx files — get a ready-to-open infrastructure diagram</p>
+  <p class="subtitle">Upload <strong>RVTools</strong> or <strong>LiveOptics</strong> .xlsx exports — get a ready-to-open infrastructure diagram</p>
 </header>
 
 <div class="card">
   <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
     <div class="drop-icon">📂</div>
-    <p class="drop-text">Drop your <strong>RVTools .xlsx</strong> files here<br>or <strong>click to browse</strong></p>
+    <p class="drop-text">Drop your <strong>RVTools</strong> or <strong>LiveOptics</strong> .xlsx files here<br>or <strong>click to browse</strong></p>
   </div>
   <input type="file" id="file-input" accept=".xlsx" multiple/>
   <div id="file-list"></div>
@@ -305,6 +305,78 @@ function parseRvtools(arrayBuffer, siteName) {
     total_hosts: hosts.length,
     total_vms: hosts.reduce((s, h) => s + (parseInt(h.vms) || 0), 0),
   };
+}
+
+// ── LiveOptics parser ─────────────────────────────────────────────────────────
+function parseLiveOptics(arrayBuffer, siteName) {
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheetMap = {};
+  wb.SheetNames.forEach(s => sheetMap[s.toLowerCase()] = s);
+
+  const hostsKey = sheetMap['esx hosts'];
+  if (!hostsKey) throw new Error(`No "ESX Hosts" sheet found in "${siteName}"`);
+
+  const hostsRows = XLSX.utils.sheet_to_json(wb.Sheets[hostsKey], { defval: '' });
+  if (!hostsRows.length) throw new Error(`"ESX Hosts" sheet is empty in "${siteName}"`);
+
+  // Build performance lookup: Host Name → perf row
+  const perfMap = {};
+  const perfKey = sheetMap['esx performance'];
+  if (perfKey) {
+    for (const row of XLSX.utils.sheet_to_json(wb.Sheets[perfKey], { defval: '' })) {
+      const h = safe(row['Host']);
+      if (h) perfMap[h] = row;
+    }
+  }
+
+  // vCenter version from first host row
+  let vcenterVersion = '';
+  const vcStr = safe(hostsRows[0]['vCenter']);
+  const vcMatch = vcStr.match(/(\d+\.\d+\.\d+)/);
+  if (vcMatch) vcenterVersion = vcMatch[1];
+
+  const hosts = [];
+  for (const row of hostsRows) {
+    const hostname = safe(row['Host Name']);
+    if (!hostname) continue;
+
+    // ESXi version from OS field e.g. "VMware ESXi 8.0.2 build-23305546"
+    let esxi = '';
+    const osMatch = safe(row['OS']).match(/(\d+\.\d+\.\d+)/);
+    if (osMatch) esxi = osMatch[1];
+
+    const perf = perfMap[hostname] || {};
+    hosts.push({
+      hostname,
+      cluster:  safe(row['Cluster'])       || 'Default',
+      model:    safe(row['Model']),
+      esxi,
+      vms:      safe(row['Guest VM Count']) || '0',
+      cpu:      fmtPct(safe(perf['Average CPU %'])),
+      mem:      fmtPct(safe(perf['Average Memory %'])),
+      svc:      safe(row['Serial No']),
+    });
+  }
+
+  const clusters = {};
+  for (const h of hosts) (clusters[h.cluster] ||= []).push(h);
+
+  return {
+    site_name: siteName,
+    clusters,
+    vcenter_version: vcenterVersion,
+    total_hosts: hosts.length,
+    total_vms: hosts.reduce((s, h) => s + (parseInt(h.vms) || 0), 0),
+  };
+}
+
+// ── Auto-detect format and parse ──────────────────────────────────────────────
+function parseFile(arrayBuffer, siteName) {
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const lower = wb.SheetNames.map(s => s.toLowerCase());
+  if (lower.includes('vhost'))     return parseRvtools(arrayBuffer, siteName);
+  if (lower.includes('esx hosts')) return parseLiveOptics(arrayBuffer, siteName);
+  throw new Error(`"${siteName}" is not a recognised RVTools or LiveOptics export`);
 }
 
 // ── Excalidraw element builder ────────────────────────────────────────────────
@@ -463,7 +535,7 @@ async function generate() {
     const sites = [];
     for (const item of files) {
       const buf = await readFile(item.file);
-      sites.push(parseRvtools(buf, item.name || item.file.name));
+      sites.push(parseFile(buf, item.name || item.file.name));
     }
     const doc = generateExcalidraw(sites);
     window.__excalidrawDoc = doc;
