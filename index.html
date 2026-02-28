@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RVTools → Excalidraw · ITQ</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --itq-orange:  #F05A28;
+    --itq-dark:    #1A1A2E;
+    --bg:          #F4F5F7;
+    --card:        #FFFFFF;
+    --border:      #DDE1E9;
+    --text:        #2D3748;
+    --muted:       #718096;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px 80px;
+  }
+  header { text-align: center; margin-bottom: 40px; }
+  .logo-bar {
+    display: flex; align-items: center; justify-content: center;
+    gap: 12px; margin-bottom: 8px;
+  }
+  .logo-box {
+    width: 40px; height: 40px;
+    background: var(--itq-orange); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; font-size: 16px;
+  }
+  h1 { font-size: 1.8rem; font-weight: 700; color: var(--itq-dark); }
+  h1 span { color: var(--itq-orange); }
+  .subtitle { color: var(--muted); font-size: 0.95rem; margin-top: 4px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 32px;
+    width: 100%; max-width: 680px;
+    box-shadow: 0 2px 16px rgba(0,0,0,.07);
+  }
+  .drop-zone {
+    border: 2.5px dashed var(--border); border-radius: 12px;
+    padding: 40px 24px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--itq-orange); background: #fff6f2;
+  }
+  .drop-icon { font-size: 2.5rem; margin-bottom: 10px; }
+  .drop-text { font-size: 1rem; color: var(--muted); }
+  .drop-text strong { color: var(--itq-orange); cursor: pointer; }
+  #file-input { display: none; }
+  #file-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
+  .file-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px;
+  }
+  .file-icon { font-size: 1.4rem; }
+  .file-name {
+    flex: 1; font-size: 0.9rem; font-weight: 600; color: var(--itq-dark);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .site-input {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; font-size: 0.85rem; width: 130px;
+    color: var(--text); outline: none; transition: border-color .2s;
+  }
+  .site-input:focus { border-color: var(--itq-orange); }
+  .remove-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 1.1rem; color: var(--muted); transition: color .15s;
+  }
+  .remove-btn:hover { color: #e53e3e; }
+  .btn {
+    display: block; width: 100%; margin-top: 28px;
+    padding: 14px 0; font-size: 1rem; font-weight: 700;
+    background: var(--itq-orange); color: #fff;
+    border: none; border-radius: 10px; cursor: pointer;
+    transition: background .2s, transform .1s; letter-spacing: .3px;
+  }
+  .btn:hover:not(:disabled) { background: #d44d1e; transform: translateY(-1px); }
+  .btn:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+  #status {
+    margin-top: 18px; text-align: center;
+    font-size: 0.9rem; min-height: 22px;
+  }
+  .err { color: #e53e3e; }
+  .ok  { color: #2d8a4e; font-weight: 600; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid var(--border); border-top-color: var(--itq-orange);
+    border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer {
+    margin-top: 40px; font-size: 0.8rem; color: var(--muted); text-align: center;
+  }
+  footer a { color: var(--itq-orange); text-decoration: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-bar">
+    <div class="logo-box">ITQ</div>
+    <h1>RVTools <span>→ Excalidraw</span></h1>
+  </div>
+  <p class="subtitle">Upload one or more RVTools .xlsx files — get a ready-to-open infrastructure diagram</p>
+</header>
+
+<div class="card">
+  <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+    <div class="drop-icon">📂</div>
+    <p class="drop-text">Drop your <strong>RVTools .xlsx</strong> files here<br>or <strong>click to browse</strong></p>
+  </div>
+  <input type="file" id="file-input" accept=".xlsx" multiple/>
+  <div id="file-list"></div>
+  <button class="btn" id="generate-btn" disabled onclick="generate()">
+    Generate Excalidraw Diagram
+  </button>
+  <div id="status"></div>
+</div>
+
+<footer>
+  Built with ♥ by ITQ &nbsp;·&nbsp;
+  Open the generated <code>.excalidraw</code> file at
+  <a href="https://excalidraw.com" target="_blank">excalidraw.com</a>
+</footer>
+
+<script>
+// ── Color palettes ────────────────────────────────────────────────────────────
+const PALETTES = [
+  { zone_bg:"#FEF0EA", zone_stroke:"#F05A28", hdr_bg:"#F05A28", hdr_text:"#FFFFFF",
+    cluster_bg:"#FEF5F0", cluster_stroke:"#F05A28", host_bg:"#FFFFFF", host_stroke:"#F7A07A", host_text:"#7A2E0E" },
+  { zone_bg:"#E8F0FB", zone_stroke:"#1A5DAD", hdr_bg:"#1A5DAD", hdr_text:"#FFFFFF",
+    cluster_bg:"#EDF3FD", cluster_stroke:"#1A5DAD", host_bg:"#FFFFFF", host_stroke:"#5B9BD5", host_text:"#0D3B78" },
+  { zone_bg:"#E8F5EE", zone_stroke:"#1E8449", hdr_bg:"#1E8449", hdr_text:"#FFFFFF",
+    cluster_bg:"#EDF7F1", cluster_stroke:"#1E8449", host_bg:"#FFFFFF", host_stroke:"#52BE80", host_text:"#145A32" },
+  { zone_bg:"#EDE8F7", zone_stroke:"#5B3DAB", hdr_bg:"#5B3DAB", hdr_text:"#FFFFFF",
+    cluster_bg:"#F3F0FB", cluster_stroke:"#5B3DAB", host_bg:"#FFFFFF", host_stroke:"#9B7DD4", host_text:"#3D2580" },
+  { zone_bg:"#EAF0F0", zone_stroke:"#2E7D8C", hdr_bg:"#2E7D8C", hdr_text:"#FFFFFF",
+    cluster_bg:"#EEF4F5", cluster_stroke:"#2E7D8C", host_bg:"#FFFFFF", host_stroke:"#6BB8C4", host_text:"#1A4D56" },
+  { zone_bg:"#FAE8E8", zone_stroke:"#C0392B", hdr_bg:"#C0392B", hdr_text:"#FFFFFF",
+    cluster_bg:"#FDF0F0", cluster_stroke:"#C0392B", host_bg:"#FFFFFF", host_stroke:"#E57373", host_text:"#7B241C" },
+];
+
+// ── Layout constants ──────────────────────────────────────────────────────────
+const ZONE_W    = 780;
+const COLS      = 3;
+const HOST_W    = 230;
+const HOST_H    = 120;
+const CLUSTER_H = 28;
+const HEADER_H  = 65;
+const PAD       = 12;
+const COL_GAP   = 10;
+const ROW_GAP   = 8;
+const ZONE_GAP  = 30;
+const CANVAS_X  = 60;
+const CANVAS_Y  = 60;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function uid() { return crypto.randomUUID(); }
+
+function findCol(headers, candidates) {
+  const map = {};
+  headers.forEach(h => map[h.toLowerCase()] = h);
+  for (const c of candidates) {
+    if (c.toLowerCase() in map) return map[c.toLowerCase()];
+  }
+  return null;
+}
+
+function safe(val) {
+  if (val === null || val === undefined) return '';
+  return String(val).trim();
+}
+
+function fmtPct(v) {
+  const f = parseFloat(v);
+  return isNaN(f) ? (v || '—') : `${Math.round(f)}%`;
+}
+
+// ── RVTools parser ────────────────────────────────────────────────────────────
+function parseRvtools(arrayBuffer, siteName) {
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+
+  const sheetMap = {};
+  wb.SheetNames.forEach(s => sheetMap[s.toLowerCase()] = s);
+
+  const vhostKey = sheetMap['vhost'];
+  if (!vhostKey) throw new Error(`No vHost sheet found in "${siteName}"`);
+
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[vhostKey], { defval: '' });
+  if (!rows.length) throw new Error(`vHost sheet is empty in "${siteName}"`);
+
+  const headers = Object.keys(rows[0]);
+  const colHost    = findCol(headers, ['VM Host', 'Host', 'DNS Name', 'Name']);
+  const colCluster = findCol(headers, ['Cluster', 'Cluster Name']);
+  const colModel   = findCol(headers, ['Model', 'Hardware Model']);
+  const colEsxi    = findCol(headers, ['ESX Version', 'ESXi Version', 'Version']);
+  const colVms     = findCol(headers, ['# VMs', 'VMs', 'Number of VMs', '#VMs']);
+  const colCpu     = findCol(headers, ['CPU usage %', 'CPU %', 'CPU Usage %', 'CPU%']);
+  const colMem     = findCol(headers, ['Memory usage %', 'Mem %', 'Memory %', 'Mem%']);
+  const colSvc     = findCol(headers, ['Service Tag', 'Serial Number', 'SN']);
+
+  const hosts = [];
+  for (const row of rows) {
+    const hostname = colHost ? safe(row[colHost]) : '';
+    if (!hostname) continue;
+
+    let esxi = colEsxi ? safe(row[colEsxi]) : '';
+    const m = esxi.match(/(\d+\.\d+\.\d+)/);
+    if (m) esxi = m[1];
+
+    hosts.push({
+      hostname,
+      cluster:  colCluster ? (safe(row[colCluster]) || 'Default') : 'Default',
+      model:    colModel   ? safe(row[colModel])  : '',
+      esxi,
+      vms:      colVms     ? (safe(row[colVms])   || '0') : '0',
+      cpu:      fmtPct(colCpu ? safe(row[colCpu]) : ''),
+      mem:      fmtPct(colMem ? safe(row[colMem]) : ''),
+      svc:      colSvc     ? safe(row[colSvc])    : '',
+    });
+  }
+
+  // vSource → vCenter version
+  let vcenterVersion = '';
+  const vsKey = sheetMap['vsource'];
+  if (vsKey) {
+    const vsRows = XLSX.utils.sheet_to_json(wb.Sheets[vsKey], { defval: '' });
+    if (vsRows.length) {
+      const vsHeaders = Object.keys(vsRows[0]);
+      const colFn = findCol(vsHeaders, ['Fullname', 'Full Name', 'Version', 'Name']);
+      if (colFn) {
+        for (const row of vsRows) {
+          const s = safe(row[colFn]);
+          let mv = s.match(/vCenter Server\s+(\d+\.\d+\.\d+)/i);
+          if (!mv) mv = s.match(/(\d+\.\d+\.\d+\.\d+)/);
+          if (mv) { vcenterVersion = mv[1]; break; }
+        }
+      }
+    }
+  }
+
+  const clusters = {};
+  for (const h of hosts) {
+    (clusters[h.cluster] ||= []).push(h);
+  }
+
+  return {
+    site_name: siteName,
+    clusters,
+    vcenter_version: vcenterVersion,
+    total_hosts: hosts.length,
+    total_vms: hosts.reduce((s, h) => s + (parseInt(h.vms) || 0), 0),
+  };
+}
+
+// ── Excalidraw element builder ────────────────────────────────────────────────
+function makeRect(id, x, y, w, h, bg, stroke, text = '', fontSize = 12,
+                  bold = false, textColor = '#1A1A2E', vAlign = 'middle', rounded = 8) {
+  const el = {
+    id, type: 'rectangle', x, y, width: w, height: h, angle: 0,
+    strokeColor: stroke, backgroundColor: bg, fillStyle: 'solid',
+    strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100,
+    groupIds: [], roundness: { type: 3, value: rounded },
+    seed: 1, version: 1, versionNonce: 0, isDeleted: false,
+    boundElements: [], updated: 1, link: null, locked: false,
+  };
+  const elements = [el];
+  if (text) {
+    const txtId = uid();
+    el.boundElements.push({ type: 'text', id: txtId });
+    elements.push({
+      id: txtId, type: 'text', x, y, width: w, height: h, angle: 0,
+      strokeColor: textColor, backgroundColor: 'transparent',
+      fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid',
+      roughness: 0, opacity: 100, groupIds: [], seed: 1,
+      version: 1, versionNonce: 0, isDeleted: false,
+      boundElements: [], updated: 1, link: null, locked: false,
+      text,
+      fontSize: bold ? fontSize + 1 : fontSize,
+      fontFamily: bold ? 1 : 3,
+      textAlign: 'center', verticalAlign: vAlign,
+      containerId: id, originalText: text, autoResize: true, lineHeight: 1.25,
+    });
+  }
+  return elements;
+}
+
+// ── Excalidraw diagram generator ──────────────────────────────────────────────
+function generateExcalidraw(sites) {
+  const elements = [];
+  let xCursor = CANVAS_X;
+
+  for (let idx = 0; idx < sites.length; idx++) {
+    const { site_name, clusters, vcenter_version, total_hosts, total_vms } = sites[idx];
+    const p = PALETTES[idx % PALETTES.length];
+
+    // Zone height
+    let innerH = HEADER_H + PAD;
+    for (const chosts of Object.values(clusters)) {
+      innerH += CLUSTER_H + PAD + Math.ceil(chosts.length / COLS) * (HOST_H + ROW_GAP);
+    }
+    const zoneH = innerH + PAD;
+    const y0 = CANVAS_Y;
+
+    // Site zone background
+    elements.push(...makeRect(uid(), xCursor, y0, ZONE_W, zoneH,
+      p.zone_bg, p.zone_stroke, '', 12, false, '#1A1A2E', 'middle', 12));
+
+    // Site header
+    let hdrText = `${site_name}  ·  ${total_hosts} hosts  ·  ${total_vms} VMs`;
+    if (vcenter_version) hdrText += `\nvCenter ${vcenter_version}`;
+    elements.push(...makeRect(uid(), xCursor, y0, ZONE_W, HEADER_H,
+      p.hdr_bg, p.hdr_bg, hdrText, 14, true, p.hdr_text, 'middle', 10));
+
+    // Clusters
+    let cy = y0 + HEADER_H + PAD;
+    for (const [cname, chosts] of Object.entries(clusters)) {
+      elements.push(...makeRect(uid(), xCursor + PAD, cy, ZONE_W - 2*PAD, CLUSTER_H,
+        p.cluster_bg, p.cluster_stroke, cname, 11, true, p.zone_stroke, 'middle', 4));
+      cy += CLUSTER_H + PAD;
+
+      const rows = Math.ceil(chosts.length / COLS);
+      chosts.forEach((h, i) => {
+        const hx = xCursor + PAD + (i % COLS) * (HOST_W + COL_GAP);
+        const hy = cy + Math.floor(i / COLS) * (HOST_H + ROW_GAP);
+        const label = [
+          h.hostname,
+          h.model || '—',
+          h.svc ? `SVC: ${h.svc}` : 'SVC: —',
+          h.esxi ? `ESXi ${h.esxi}` : 'ESXi —',
+          `VMs:${h.vms}  CPU:${h.cpu}  Mem:${h.mem}`,
+        ].join('\n');
+        elements.push(...makeRect(uid(), hx, hy, HOST_W, HOST_H,
+          p.host_bg, p.host_stroke, label, 9, false, p.host_text, 'middle', 6));
+      });
+
+      cy += rows * (HOST_H + ROW_GAP) + PAD;
+    }
+
+    xCursor += ZONE_W + ZONE_GAP;
+  }
+
+  return { type: 'excalidraw', version: 2, source: 'https://excalidraw.com',
+           elements, appState: { gridSize: null, viewBackgroundColor: '#F4F5F7' }, files: {} };
+}
+
+// ── UI logic ──────────────────────────────────────────────────────────────────
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const fileList  = document.getElementById('file-list');
+const genBtn    = document.getElementById('generate-btn');
+const status    = document.getElementById('status');
+
+let files = [];
+
+function guessName(filename) {
+  return filename.replace(/\.xlsx$/i, '').replace(/[_-]/g, ' ').trim();
+}
+
+function renderList() {
+  fileList.innerHTML = '';
+  files.forEach((item, i) => {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    row.innerHTML = `
+      <span class="file-icon">📄</span>
+      <span class="file-name" title="${item.file.name}">${item.file.name}</span>
+      <input class="site-input" type="text" value="${item.name}" placeholder="Site name"
+             oninput="files[${i}].name=this.value"/>
+      <button class="remove-btn" onclick="removeFile(${i})" title="Remove">✕</button>`;
+    fileList.appendChild(row);
+  });
+  genBtn.disabled = files.length === 0;
+}
+
+function addFiles(newFiles) {
+  for (const f of newFiles) {
+    if (f.name.endsWith('.xlsx') && !files.find(x => x.file.name === f.name))
+      files.push({ file: f, name: guessName(f.name) });
+  }
+  renderList();
+  status.innerHTML = '';
+}
+
+function removeFile(i) { files.splice(i, 1); renderList(); }
+
+fileInput.addEventListener('change', () => addFiles(fileInput.files));
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over'); addFiles(e.dataTransfer.files);
+});
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function generate() {
+  if (!files.length) return;
+  genBtn.disabled = true;
+  status.innerHTML = '<span class="spinner"></span> Generating diagram…';
+
+  try {
+    const sites = [];
+    for (const item of files) {
+      const buf = await readFile(item.file);
+      sites.push(parseRvtools(buf, item.name || item.file.name));
+    }
+    const doc = generateExcalidraw(sites);
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'vmware_infrastructure.excalidraw'; a.click();
+    URL.revokeObjectURL(url);
+    status.innerHTML = '<span class="ok">✓ Diagram downloaded! Open it at excalidraw.com</span>';
+  } catch (e) {
+    status.innerHTML = `<span class="err">Error: ${e.message}</span>`;
+  } finally {
+    genBtn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>
