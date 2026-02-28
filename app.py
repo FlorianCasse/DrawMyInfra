@@ -13,14 +13,14 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# ─── ITQ Color Palette (up to 6 sites) ────────────────────────────────────────
+# ─── Color Palette (up to 6 sites) ───────────────────────────────────────────
 PALETTES = [
-    {   # ITQ Orange — primary brand
-        "zone_bg":    "#FEF0EA", "zone_stroke": "#F05A28",
-        "hdr_bg":     "#F05A28", "hdr_text":    "#FFFFFF",
-        "cluster_bg": "#FEF5F0", "cluster_stroke": "#F05A28",
-        "host_bg":    "#FFFFFF", "host_stroke":  "#F7A07A",
-        "host_text":  "#7A2E0E",
+    {   # DrawMyInfra Teal — primary brand
+        "zone_bg":    "#E3F5F4", "zone_stroke": "#2DC4B8",
+        "hdr_bg":     "#2DC4B8", "hdr_text":    "#FFFFFF",
+        "cluster_bg": "#EAF8F7", "cluster_stroke": "#2DC4B8",
+        "host_bg":    "#FFFFFF", "host_stroke":  "#7DD4CE",
+        "host_text":  "#0D4A45",
     },
     {   # ITQ Blue
         "zone_bg":    "#E8F0FB", "zone_stroke": "#1A5DAD",
@@ -271,7 +271,7 @@ def parse_file(file_bytes, site_name):
 
 # ─── Excalidraw generation ────────────────────────────────────────────────────
 def rect(id_, x, y, w, h, bg, stroke, text="", font_size=12, bold=False,
-         text_color="#1A1A2E", v_align="middle", rounded=8):
+         text_color="#1C2E44", v_align="middle", rounded=8):
     el = {
         "id": id_,
         "type": "rectangle",
@@ -441,13 +441,14 @@ HTML = r"""<!DOCTYPE html>
 <title>DrawMyInfra</title>
 <style>
   :root {
-    --itq-orange:  #F05A28;
-    --itq-dark:    #1A1A2E;
-    --bg:          #F4F5F7;
+    --primary:     #2DC4B8;
+    --primary-dk:  #22A89E;
+    --brand-dark:  #1C2E44;
+    --bg:          #EEF4F8;
     --card:        #FFFFFF;
-    --border:      #DDE1E9;
+    --border:      #D0DAE6;
     --text:        #2D3748;
-    --muted:       #718096;
+    --muted:       #64748B;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -464,23 +465,8 @@ HTML = r"""<!DOCTYPE html>
     text-align: center;
     margin-bottom: 40px;
   }
-  .logo-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    margin-bottom: 8px;
-  }
-  .logo-box {
-    width: 40px; height: 40px;
-    background: var(--itq-orange);
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    color: #fff; font-weight: 800; font-size: 16px;
-  }
-  h1 { font-size: 1.8rem; font-weight: 700; color: var(--itq-dark); }
-  h1 span { color: var(--itq-orange); }
-  .subtitle { color: var(--muted); font-size: 0.95rem; margin-top: 4px; }
+  .logo-img { height: 180px; width: auto; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.95rem; }
   .card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -498,12 +484,12 @@ HTML = r"""<!DOCTYPE html>
     transition: border-color .2s, background .2s;
   }
   .drop-zone:hover, .drop-zone.drag-over {
-    border-color: var(--itq-orange);
+    border-color: var(--primary);
     background: #fff6f2;
   }
   .drop-icon { font-size: 2.5rem; margin-bottom: 10px; }
   .drop-text { font-size: 1rem; color: var(--muted); }
-  .drop-text strong { color: var(--itq-orange); cursor: pointer; }
+  .drop-text strong { color: var(--primary); cursor: pointer; }
   #file-input { display: none; }
 
   #file-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
@@ -513,14 +499,14 @@ HTML = r"""<!DOCTYPE html>
     border-radius: 10px; padding: 10px 14px;
   }
   .file-icon { font-size: 1.4rem; }
-  .file-name { flex: 1; font-size: 0.9rem; font-weight: 600; color: var(--itq-dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-name { flex: 1; font-size: 0.9rem; font-weight: 600; color: var(--brand-dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .site-input {
     border: 1px solid var(--border); border-radius: 6px;
     padding: 4px 10px; font-size: 0.85rem; width: 130px;
     color: var(--text); outline: none;
     transition: border-color .2s;
   }
-  .site-input:focus { border-color: var(--itq-orange); }
+  .site-input:focus { border-color: var(--primary); }
   .remove-btn {
     background: none; border: none; cursor: pointer;
     font-size: 1.1rem; color: var(--muted);
@@ -531,12 +517,12 @@ HTML = r"""<!DOCTYPE html>
   .btn {
     display: block; width: 100%; margin-top: 28px;
     padding: 14px 0; font-size: 1rem; font-weight: 700;
-    background: var(--itq-orange); color: #fff;
+    background: var(--primary); color: #fff;
     border: none; border-radius: 10px; cursor: pointer;
     transition: background .2s, transform .1s;
     letter-spacing: .3px;
   }
-  .btn:hover:not(:disabled) { background: #d44d1e; transform: translateY(-1px); }
+  .btn:hover:not(:disabled) { background: var(--primary-dk); transform: translateY(-1px); }
   .btn:disabled { background: #ccc; cursor: not-allowed; transform: none; }
 
   #status {
@@ -547,7 +533,7 @@ HTML = r"""<!DOCTYPE html>
   .ok  { color: #2d8a4e; font-weight: 600; }
   .spinner {
     display: inline-block; width: 16px; height: 16px;
-    border: 2px solid var(--border); border-top-color: var(--itq-orange);
+    border: 2px solid var(--border); border-top-color: var(--primary);
     border-radius: 50%; animation: spin .7s linear infinite;
     vertical-align: middle; margin-right: 6px;
   }
@@ -555,15 +541,12 @@ HTML = r"""<!DOCTYPE html>
   footer {
     margin-top: 40px; font-size: 0.8rem; color: var(--muted); text-align: center;
   }
-  footer a { color: var(--itq-orange); text-decoration: none; }
+  footer a { color: var(--primary); text-decoration: none; }
 </style>
 </head>
 <body>
 <header>
-  <div class="logo-bar">
-    <div class="logo-box">DMI</div>
-    <h1>Draw<span>MyInfra</span></h1>
-  </div>
+  <img src="/static/logo.png" alt="DrawMyInfra" class="logo-img"/>
   <p class="subtitle">Upload <strong>RVTools</strong> or <strong>LiveOptics</strong> .xlsx exports — get a ready-to-open infrastructure diagram</p>
 </header>
 
