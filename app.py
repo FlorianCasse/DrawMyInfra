@@ -409,6 +409,91 @@ def license_report_csv(report):
     return "\n".join(lines)
 
 
+def license_report_txt(report):
+    """Generate PowerShell-style fixed-width text report."""
+    dt = report["deployment_type"]
+    full_name = "VMware Cloud Foundation (VCF) Instance" if dt == "VCF" else "VMware vSphere Foundation (VVF)"
+
+    hdrs = ["CLUSTER", "VMHOST", "NUM_CPU_SOCKETS", "NUM_CPU_CORES_PER_SOCKET",
+            "FOUNDATION_LICENSE_CORE_COUNT", "VSAN_LICENSE_TIB_COUNT"]
+    cols = [len(h) for h in hdrs]
+    for r in report["rows"]:
+        cols[0] = max(cols[0], len(r["cluster"] or ""))
+        cols[1] = max(cols[1], len(r["hostname"] or ""))
+        cols[2] = max(cols[2], len(str(r["sockets"])))
+        cols[3] = max(cols[3], len(str(r["cores_per_socket"])))
+        fc = "-" if r["missing"] else str(r["foundation_cores"])
+        et = "-" if r["missing"] else f'{r["entitled_tib"]:.2f}'
+        cols[4] = max(cols[4], len(fc))
+        cols[5] = max(cols[5], len(et))
+    cols[0] = max(cols[0], 5)  # 'Total'
+    cols[4] = max(cols[4], len(str(report["total_cores"])))
+    cols[5] = max(cols[5], len(f'{report["total_tib"]:.2f}'))
+
+    def pad(s, w, right=False):
+        return str(s).rjust(w) if right else str(s).ljust(w)
+
+    hdr_line = " ".join(pad(h, cols[i], i >= 2) for i, h in enumerate(hdrs))
+    sep_line = " ".join("-" * w for w in cols)
+
+    lines = [
+        f"Sizing Results for {full_name}:",
+        "",
+        "Host Information",
+        "",
+        hdr_line,
+        sep_line,
+    ]
+
+    for r in report["rows"]:
+        fc = "-" if r["missing"] else str(r["foundation_cores"])
+        et = "-" if r["missing"] else f'{r["entitled_tib"]:.2f}'
+        lines.append(" ".join([
+            pad(r["cluster"] or "", cols[0]),
+            pad(r["hostname"] or "", cols[1]),
+            pad("-" if r["missing"] else r["sockets"], cols[2], True),
+            pad("-" if r["missing"] else r["cores_per_socket"], cols[3], True),
+            pad(fc, cols[4], True),
+            pad(et, cols[5], True),
+        ]))
+
+    lines.append(" ".join([
+        pad("Total", cols[0]),
+        pad("-", cols[1]),
+        pad("-", cols[2], True),
+        pad("-", cols[3], True),
+        pad(str(report["total_cores"]), cols[4], True),
+        pad(f'{report["total_tib"]:.2f}', cols[5], True),
+    ]))
+
+    # Cluster Information
+    lines += ["", "Cluster Information", ""]
+    cluster_tib = {}
+    for r in report["rows"]:
+        if not r["missing"]:
+            cluster_tib[r["cluster"]] = cluster_tib.get(r["cluster"], 0) + r["entitled_tib"]
+
+    c_hdr, t_hdr = "CLUSTER", "VSAN_ENTITLED_TIB"
+    cw0 = max(len(c_hdr), max((len(k) for k in cluster_tib), default=0), 5)
+    cw1 = max(len(t_hdr), max((len(f"{v:.2f}") for v in cluster_tib.values()), default=0),
+              len(f'{report["total_tib"]:.2f}'))
+    lines.append(f"{c_hdr.ljust(cw0)} {t_hdr.rjust(cw1)}")
+    lines.append(f"{'-' * cw0} {'-' * cw1}")
+    cluster_tib_total = 0
+    for name, tib in cluster_tib.items():
+        lines.append(f"{name.ljust(cw0)} {f'{tib:.2f}'.rjust(cw1)}")
+        cluster_tib_total += tib
+    lines.append(f"{'Total'.ljust(cw0)} {f'{cluster_tib_total:.2f}'.rjust(cw1)}")
+
+    lines += [
+        "",
+        f"Total Required {dt} Compute Licenses: {report['total_cores']}",
+        f"Total Required vSAN Add-on Licenses: N/A (requires actual vSAN capacity data)",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 # ─── Excalidraw generation ────────────────────────────────────────────────────
 def rect(id_, x, y, w, h, bg, stroke, text="", font_size=12, bold=False,
          text_color="#1C2E44", v_align="middle", rounded=8):
@@ -1005,6 +1090,47 @@ def license_csv():
         mimetype="text/csv",
         as_attachment=True,
         download_name=f"license_report_{deployment_type}.csv",
+    )
+
+
+@app.route("/license-txt", methods=["POST"])
+def license_txt():
+    """Generate and download a license report TXT from uploaded files."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+
+    if not uploaded:
+        return "No files uploaded", 400
+
+    sites = []
+    for i, f in enumerate(uploaded):
+        ext = os.path.splitext(f.filename or '')[1].lower()
+        if ext != '.xlsx':
+            return f"Invalid file type: {f.filename}. Only .xlsx files are accepted.", 400
+        site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
+        try:
+            data = parse_file(f.read(), site_name)
+            sites.append(data)
+        except (ValueError, KeyError, pd.errors.ParserError) as e:
+            return f"Error parsing {f.filename}: {str(e)}", 400
+
+    if not sites:
+        return "No valid files found", 400
+
+    deployment_type = request.form.get('license_type', 'VCF')
+    if deployment_type not in ('VCF', 'VVF'):
+        deployment_type = 'VCF'
+
+    report = calculate_licensing(sites, deployment_type)
+    txt_content = license_report_txt(report)
+
+    buf = io.BytesIO(txt_content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="text/plain",
+        as_attachment=True,
+        download_name=f"license_report_{deployment_type}.txt",
     )
 
 

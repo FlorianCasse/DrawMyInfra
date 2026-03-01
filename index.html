@@ -271,6 +271,7 @@
 <div id="license-section" hidden>
   <div class="license-actions">
     <h2>VCF/VVF License Report</h2>
+    <button id="license-txt-btn" class="btn-outline">Download TXT</button>
     <button id="license-csv-btn" class="btn-outline">Download CSV</button>
   </div>
   <div id="license-summary"></div>
@@ -894,6 +895,106 @@ function renderLicenseReport() {
   </tr></tbody></table>`;
   container.innerHTML = html;
 }
+
+function generateLicenseTxt(report) {
+  const dt = report.deploymentType;
+  const fullName = dt === 'VCF' ? 'VMware Cloud Foundation (VCF) Instance' : 'VMware vSphere Foundation (VVF)';
+
+  // Compute column widths dynamically
+  const hdrs = ['CLUSTER', 'VMHOST', 'NUM_CPU_SOCKETS', 'NUM_CPU_CORES_PER_SOCKET', 'FOUNDATION_LICENSE_CORE_COUNT', 'VSAN_LICENSE_TIB_COUNT'];
+  const cols = hdrs.map(h => h.length);
+  for (const r of report.rows) {
+    cols[0] = Math.max(cols[0], (r.cluster || '').length);
+    cols[1] = Math.max(cols[1], (r.hostname || '').length);
+    cols[2] = Math.max(cols[2], String(r.sockets).length);
+    cols[3] = Math.max(cols[3], String(r.coresPerSocket).length);
+    cols[4] = Math.max(cols[4], String(r.missing ? '-' : r.foundationCores).length);
+    cols[5] = Math.max(cols[5], (r.missing ? '-' : r.entitledTib.toFixed(2)).length);
+  }
+  cols[4] = Math.max(cols[4], String(report.totalCores).length);
+  cols[5] = Math.max(cols[5], report.totalTib.toFixed(2).length);
+  // 'Total' row
+  cols[0] = Math.max(cols[0], 5);
+
+  const pad = (s, w, right) => right ? String(s).padStart(w) : String(s).padEnd(w);
+  const sep = cols.map(w => '-'.repeat(w)).join(' ');
+  const hdrLine = hdrs.map((h, i) => i < 2 ? pad(h, cols[i], false) : pad(h, cols[i], true)).join(' ');
+
+  const lines = [];
+  lines.push(`Sizing Results for ${fullName}:`);
+  lines.push('');
+  lines.push('Host Information');
+  lines.push('');
+  lines.push(hdrLine);
+  lines.push(sep);
+
+  for (const r of report.rows) {
+    const fc = r.missing ? '-' : String(r.foundationCores);
+    const tib = r.missing ? '-' : r.entitledTib.toFixed(2);
+    lines.push([
+      pad(r.cluster || '', cols[0], false),
+      pad(r.hostname || '', cols[1], false),
+      pad(r.missing ? '-' : r.sockets, cols[2], true),
+      pad(r.missing ? '-' : r.coresPerSocket, cols[3], true),
+      pad(fc, cols[4], true),
+      pad(tib, cols[5], true),
+    ].join(' '));
+  }
+
+  // Total row
+  lines.push([
+    pad('Total', cols[0], false),
+    pad('-', cols[1], false),
+    pad('-', cols[2], true),
+    pad('-', cols[3], true),
+    pad(String(report.totalCores), cols[4], true),
+    pad(report.totalTib.toFixed(2), cols[5], true),
+  ].join(' '));
+
+  // Cluster Information — aggregate entitled TiB per cluster
+  lines.push('');
+  lines.push('Cluster Information');
+  lines.push('');
+
+  const clusterTib = {};
+  for (const r of report.rows) {
+    if (!r.missing) {
+      clusterTib[r.cluster] = (clusterTib[r.cluster] || 0) + r.entitledTib;
+    }
+  }
+  const cHdr = 'CLUSTER';
+  const tHdr = 'VSAN_ENTITLED_TIB';
+  const cw0 = Math.max(cHdr.length, ...Object.keys(clusterTib).map(k => k.length), 5);
+  const cw1 = Math.max(tHdr.length, ...Object.values(clusterTib).map(v => v.toFixed(2).length), report.totalTib.toFixed(2).length);
+  lines.push(pad(cHdr, cw0, false) + ' ' + pad(tHdr, cw1, true));
+  lines.push('-'.repeat(cw0) + ' ' + '-'.repeat(cw1));
+  let clusterTibTotal = 0;
+  for (const [name, tib] of Object.entries(clusterTib)) {
+    lines.push(pad(name, cw0, false) + ' ' + pad(tib.toFixed(2), cw1, true));
+    clusterTibTotal += tib;
+  }
+  lines.push(pad('Total', cw0, false) + ' ' + pad(clusterTibTotal.toFixed(2), cw1, true));
+
+  lines.push('');
+  lines.push(`Total Required ${dt} Compute Licenses: ${report.totalCores}`);
+  lines.push(`Total Required vSAN Add-on Licenses: N/A (requires actual vSAN capacity data)`);
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+document.getElementById('license-txt-btn').addEventListener('click', () => {
+  const report = window.__licenseReport;
+  if (!report) return;
+  const txt = generateLicenseTxt(report);
+  const blob = new Blob([txt], { type: 'text/plain' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `license_report_${report.deploymentType}.txt`,
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
 
 document.getElementById('license-csv-btn').addEventListener('click', () => {
   const report = window.__licenseReport;
