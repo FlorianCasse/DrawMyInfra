@@ -159,6 +159,74 @@
     transition: border-color .2s, color .2s;
   }
   .theme-toggle:hover { border-color: var(--primary); color: var(--primary); }
+
+  /* ── License Calculator ─────────────────────────────────────────────── */
+  #license-option {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 10px; font-size: 0.9rem; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  #license-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
+  #license-type-wrapper {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: 12px;
+  }
+  #license-type-wrapper select {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 8px; font-size: 0.85rem;
+    color: var(--text); background: var(--input-bg);
+    outline: none; cursor: pointer;
+  }
+  #license-section {
+    width: 100%; max-width: 1300px;
+    margin-top: 32px;
+  }
+  .license-summary-box {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 28px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    display: flex; flex-wrap: wrap; gap: 28px; align-items: center;
+  }
+  .license-summary-box .summary-item {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .license-summary-box .summary-label {
+    font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+  }
+  .license-summary-box .summary-value {
+    font-size: 1.3rem; font-weight: 700; color: var(--brand-dark);
+  }
+  .license-table-wrapper { overflow-x: auto; }
+  .license-table {
+    width: 100%; border-collapse: collapse;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+    font-size: 0.88rem;
+  }
+  .license-table th {
+    background: var(--primary); color: #fff;
+    padding: 10px 14px; text-align: left; font-weight: 600;
+    white-space: nowrap;
+  }
+  .license-table td {
+    padding: 8px 14px; border-bottom: 1px solid var(--border);
+  }
+  .license-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .license-table tr:last-child td { border-bottom: none; }
+  .license-table tr.totals-row td {
+    font-weight: 700; background: var(--bg);
+    border-top: 2px solid var(--primary);
+  }
+  .license-table tr:hover:not(.totals-row) td { background: var(--drop-hover); }
+  .license-note {
+    margin-top: 14px; font-size: 0.82rem; color: var(--muted);
+    line-height: 1.5;
+  }
+  .license-actions {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 14px;
+  }
+  .license-actions h2 { font-size: 1.1rem; font-weight: 700; color: var(--brand-dark); flex: 1; }
 </style>
 </head>
 <body>
@@ -177,6 +245,15 @@
   <label id="vcf9-option">
     <input type="checkbox" id="vcf9-check"/> Check VCF 9 Compatibility (Broadcom Compatibility Guide)
   </label>
+  <label id="license-option">
+    <input type="checkbox" id="license-check"/> VCF/VVF License Calculator
+    <span id="license-type-wrapper">
+      <select id="license-type">
+        <option value="VCF">VCF (1 TiB/core)</option>
+        <option value="VVF">VVF (0.25 TiB/core)</option>
+      </select>
+    </span>
+  </label>
   <button class="btn" id="generate-btn" disabled onclick="generate()">
     Generate Excalidraw Diagram
   </button>
@@ -189,6 +266,23 @@
     <button id="download-btn" class="btn-outline">Download .excalidraw</button>
   </div>
   <div id="excalidraw-mount"></div>
+</div>
+
+<div id="license-section" hidden>
+  <div class="license-actions">
+    <h2>VCF/VVF License Report</h2>
+    <button id="license-csv-btn" class="btn-outline">Download CSV</button>
+  </div>
+  <div id="license-summary"></div>
+  <div class="license-table-wrapper">
+    <div id="license-table-container"></div>
+  </div>
+  <div class="license-note">
+    <strong>Note:</strong> vSAN add-on licenses are required when actual vSAN capacity exceeds the entitled TiB.
+    This cannot be determined from RVTools/LiveOptics data alone — verify against your actual vSAN capacity.
+    <br>Formula: Foundation Cores = Sockets × max(Cores per Socket, 16) &nbsp;|&nbsp;
+    Ref: <a href="https://knowledge.broadcom.com/external/article?legacyId=313548" target="_blank">KB 313548</a>
+  </div>
 </div>
 
 <footer>
@@ -334,6 +428,8 @@ function parseRvtools(wb, siteName) {
   const colCpu     = findCol(headers, ['CPU usage %', 'CPU %', 'CPU Usage %', 'CPU%']);
   const colMem     = findCol(headers, ['Memory usage %', 'Mem %', 'Memory %', 'Mem%']);
   const colSvc     = findCol(headers, ['Service Tag', 'Serial Number', 'SN']);
+  const colSockets     = findCol(headers, ['# CPU', 'CPUs', 'CPU Sockets', 'Sockets', 'Num CPU']);
+  const colCoresPerCpu = findCol(headers, ['Cores per CPU', '# Cores per CPU', 'Cores Per Socket']);
 
   const hosts = [];
   for (const row of rows) {
@@ -353,6 +449,8 @@ function parseRvtools(wb, siteName) {
       cpu:      fmtPct(colCpu ? safe(row[colCpu]) : ''),
       mem:      fmtPct(colMem ? safe(row[colMem]) : ''),
       svc:      colSvc     ? safe(row[colSvc])    : '',
+      sockets:        colSockets     ? (parseInt(safe(row[colSockets]))     || 0) : 0,
+      cores_per_socket: colCoresPerCpu ? (parseInt(safe(row[colCoresPerCpu])) || 0) : 0,
     });
   }
 
@@ -400,6 +498,10 @@ function parseLiveOptics(wb, siteName) {
   const hostsRows = XLSX.utils.sheet_to_json(wb.Sheets[hostsKey], { defval: '' });
   if (!hostsRows.length) throw new Error(`"ESX Hosts" sheet is empty in "${siteName}"`);
 
+  const loHeaders = Object.keys(hostsRows[0]);
+  const loColSockets     = findCol(loHeaders, ['CPU Sockets', 'Sockets']);
+  const loColCoresPerCpu = findCol(loHeaders, ['Cores Per Socket', 'Cores per CPU']);
+
   // Build performance lookup: Host Name → perf row
   const perfMap = {};
   const perfKey = sheetMap['esx performance'];
@@ -436,6 +538,8 @@ function parseLiveOptics(wb, siteName) {
       cpu:      fmtPct(safe(perf['Average CPU %'])),
       mem:      fmtPct(safe(perf['Average Memory %'])),
       svc:      safe(row['Serial No']),
+      sockets:        loColSockets     ? (parseInt(safe(row[loColSockets]))     || 0) : 0,
+      cores_per_socket: loColCoresPerCpu ? (parseInt(safe(row[loColCoresPerCpu])) || 0) : 0,
     });
   }
 
@@ -702,6 +806,114 @@ function readFile(file) {
   });
 })();
 
+// ── License Calculator ─────────────────────────────────────────────────────
+function calculateLicensing(sites, deploymentType) {
+  const tibPerCore = deploymentType === 'VCF' ? 1 : 0.25;
+  const rows = [];
+  let totalCores = 0, totalTib = 0, missingCount = 0;
+
+  for (const site of sites) {
+    for (const [cluster, hosts] of Object.entries(site.clusters)) {
+      for (const h of hosts) {
+        const sockets = h.sockets || 0;
+        const coresPerSocket = h.cores_per_socket || 0;
+
+        if (sockets === 0 || coresPerSocket === 0) {
+          missingCount++;
+          rows.push({
+            site: site.site_name, cluster, hostname: h.hostname,
+            sockets, coresPerSocket,
+            foundationCores: 0, entitledTib: 0, missing: true,
+          });
+          continue;
+        }
+
+        const effectiveCores = Math.max(coresPerSocket, 16);
+        const foundationCores = sockets * effectiveCores;
+        const entitledTib = foundationCores * tibPerCore;
+
+        totalCores += foundationCores;
+        totalTib += entitledTib;
+
+        rows.push({
+          site: site.site_name, cluster, hostname: h.hostname,
+          sockets, coresPerSocket,
+          foundationCores, entitledTib, missing: false,
+        });
+      }
+    }
+  }
+
+  return { rows, totalCores, totalTib, missingCount, deploymentType, tibPerCore };
+}
+
+function renderLicenseReport() {
+  const report = window.__licenseReport;
+  const section = document.getElementById('license-section');
+  if (!report) { section.hidden = true; return; }
+  section.hidden = false;
+
+  // Summary
+  const summary = document.getElementById('license-summary');
+  let warningHtml = '';
+  if (report.missingCount > 0) {
+    warningHtml = `<div class="summary-item"><span class="summary-label">Missing Data</span><span class="summary-value" style="color:#e53e3e">${report.missingCount} host(s)</span></div>`;
+  }
+  summary.innerHTML = `<div class="license-summary-box">
+    <div class="summary-item"><span class="summary-label">Deployment</span><span class="summary-value">${report.deploymentType}</span></div>
+    <div class="summary-item"><span class="summary-label">Total Foundation Cores</span><span class="summary-value">${report.totalCores.toLocaleString()}</span></div>
+    <div class="summary-item"><span class="summary-label">vSAN Entitled TiB</span><span class="summary-value">${report.totalTib.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
+    <div class="summary-item"><span class="summary-label">TiB per Core</span><span class="summary-value">${report.tibPerCore}</span></div>
+    ${warningHtml}
+  </div>`;
+
+  // Table
+  const container = document.getElementById('license-table-container');
+  let html = `<table class="license-table">
+    <thead><tr>
+      <th>Site</th><th>Cluster</th><th>Hostname</th>
+      <th>Sockets</th><th>Cores/Socket</th>
+      <th>Foundation Cores</th><th>Entitled TiB</th>
+    </tr></thead><tbody>`;
+
+  for (const r of report.rows) {
+    const cls = r.missing ? ' style="color:#e53e3e;font-style:italic"' : '';
+    html += `<tr${cls}>
+      <td>${r.site}</td><td>${r.cluster}</td><td>${r.hostname}</td>
+      <td class="num">${r.sockets || '—'}</td>
+      <td class="num">${r.coresPerSocket || '—'}</td>
+      <td class="num">${r.missing ? '—' : r.foundationCores}</td>
+      <td class="num">${r.missing ? '—' : r.entitledTib.toFixed(2)}</td>
+    </tr>`;
+  }
+
+  html += `<tr class="totals-row">
+    <td colspan="5"><strong>Total</strong></td>
+    <td class="num">${report.totalCores.toLocaleString()}</td>
+    <td class="num">${report.totalTib.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+  </tr></tbody></table>`;
+  container.innerHTML = html;
+}
+
+document.getElementById('license-csv-btn').addEventListener('click', () => {
+  const report = window.__licenseReport;
+  if (!report) return;
+  const lines = ['Site,Cluster,Hostname,Sockets,Cores per Socket,Foundation Cores,Entitled TiB'];
+  for (const r of report.rows) {
+    lines.push([r.site, r.cluster, r.hostname, r.sockets, r.coresPerSocket,
+      r.missing ? '' : r.foundationCores,
+      r.missing ? '' : r.entitledTib.toFixed(2)].map(v => `"${v}"`).join(','));
+  }
+  lines.push(['Total','','','','',report.totalCores,report.totalTib.toFixed(2)].map(v => `"${v}"`).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `license_report_${report.deploymentType}.csv`,
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 async function generate() {
   if (!files.length) return;
   genBtn.disabled = true;
@@ -741,6 +953,19 @@ async function generate() {
     const doc = generateExcalidraw(sites, vcf9Enabled && !!vcf9Lookup);
     window.__excalidrawDoc = doc;
     document.dispatchEvent(new CustomEvent('diagram-ready'));
+
+    // License Calculator
+    const licenseEnabled = document.getElementById('license-check').checked;
+    if (licenseEnabled) {
+      const deploymentType = document.getElementById('license-type').value;
+      window.__licenseReport = calculateLicensing(sites, deploymentType);
+      renderLicenseReport();
+      document.getElementById('license-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      window.__licenseReport = null;
+      document.getElementById('license-section').hidden = true;
+    }
+
     setStatus('✓ Diagram ready — see preview below', 'ok');
   } catch (e) {
     setStatus('Error: ' + e.message, 'err');

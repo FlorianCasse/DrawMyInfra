@@ -37,6 +37,27 @@ Tick the **Check VCF 9 Compatibility** checkbox before generating to check each 
 
 Incompatible hosts are highlighted with a red border in the diagram.
 
+### VCF/VVF License Calculator
+
+Tick the **VCF/VVF License Calculator** checkbox and select a deployment type (VCF or VVF) to calculate foundation core licensing from your uploaded data — no need to connect to vCenter or run PowerCLI.
+
+**Formula** (per host):
+```
+Foundation Cores = Sockets × max(Cores per Socket, 16)
+vSAN Entitled TiB = Foundation Cores × TiB per Core
+```
+
+| Deployment | TiB per Core |
+|---|---|
+| VCF | 1 TiB |
+| VVF | 0.25 TiB |
+
+The report includes a per-host table with totals and a downloadable CSV. Hosts with missing CPU socket or core data are flagged and excluded from totals.
+
+> **Note:** vSAN add-on licenses are required when actual vSAN capacity exceeds the entitled TiB. This cannot be determined from RVTools/LiveOptics data — verify against your actual vSAN capacity.
+
+Reference: [Broadcom KB 313548](https://knowledge.broadcom.com/external/article?legacyId=313548)
+
 ---
 
 ## Usage
@@ -45,9 +66,11 @@ Incompatible hosts are highlighted with a red border in the diagram.
 2. Drop one or more `.xlsx` files onto the upload area
 3. Optionally rename each site
 4. Optionally tick **Check VCF 9 Compatibility** to add Broadcom Compatibility Guide readiness indicators
-5. Click **Generate Diagram**
-6. Preview the diagram live on the page
-7. Click **Download .excalidraw** and open it at [excalidraw.com](https://excalidraw.com)
+5. Optionally tick **VCF/VVF License Calculator** and choose VCF or VVF to get a foundation core licensing report
+6. Click **Generate Diagram**
+7. Preview the diagram live on the page, and review the license report if enabled
+8. Click **Download .excalidraw** and open it at [excalidraw.com](https://excalidraw.com)
+9. Click **Download CSV** to export the license report
 
 ---
 

@@ -165,6 +165,8 @@ def parse_rvtools(xls, site_name):
     col_cpu     = find_col(vh, ["CPU usage %", "CPU %", "CPU Usage %", "CPU%"])
     col_mem     = find_col(vh, ["Memory usage %", "Mem %", "Memory %", "Mem%"])
     col_svc     = find_col(vh, ["Service Tag", "Serial Number", "SN"])
+    col_sockets     = find_col(vh, ["# CPU", "CPUs", "CPU Sockets", "Sockets", "Num CPU"])
+    col_cores_cpu   = find_col(vh, ["Cores per CPU", "# Cores per CPU", "Cores Per Socket"])
 
     hosts = []
     for _, row in vh.iterrows():
@@ -185,6 +187,20 @@ def parse_rvtools(xls, site_name):
         if m:
             esxi_short = m.group(1)
 
+        # Socket / core counts for license calculator
+        sockets_val = 0
+        if col_sockets:
+            try:
+                sockets_val = int(float(safe(row[col_sockets])))
+            except (ValueError, TypeError):
+                pass
+        cores_val = 0
+        if col_cores_cpu:
+            try:
+                cores_val = int(float(safe(row[col_cores_cpu])))
+            except (ValueError, TypeError):
+                pass
+
         hosts.append({
             "hostname": hostname,
             "cluster":  cluster or "Default",
@@ -194,6 +210,8 @@ def parse_rvtools(xls, site_name):
             "cpu":      fmt_pct(cpu),
             "mem":      fmt_pct(mem),
             "svc":      svc,
+            "sockets":          sockets_val,
+            "cores_per_socket": cores_val,
         })
 
     # ── vSource sheet (vCenter version) ──
@@ -237,6 +255,9 @@ def parse_liveoptics(xls, site_name):
 
     hosts_df = xls.parse(hosts_sheet, header=0)
 
+    col_lo_sockets   = find_col(hosts_df, ["CPU Sockets", "Sockets"])
+    col_lo_cores_cpu = find_col(hosts_df, ["Cores Per Socket", "Cores per CPU"])
+
     # Performance sheet for CPU/Mem %
     perf_map = {}
     perf_sheet = sheet_names_lower.get("esx performance")
@@ -270,6 +291,19 @@ def parse_liveoptics(xls, site_name):
 
         perf = perf_map.get(hostname, {})
 
+        sockets_val = 0
+        if col_lo_sockets:
+            try:
+                sockets_val = int(float(safe(row[col_lo_sockets])))
+            except (ValueError, TypeError):
+                pass
+        cores_val = 0
+        if col_lo_cores_cpu:
+            try:
+                cores_val = int(float(safe(row[col_lo_cores_cpu])))
+            except (ValueError, TypeError):
+                pass
+
         hosts.append({
             "hostname": hostname,
             "cluster":  safe(row.get("Cluster", "")) or "Default",
@@ -279,6 +313,8 @@ def parse_liveoptics(xls, site_name):
             "cpu":      fmt_pct(perf.get("Average CPU %", "")),
             "mem":      fmt_pct(perf.get("Average Memory %", "")),
             "svc":      safe(row.get("Serial No", "")),
+            "sockets":          sockets_val,
+            "cores_per_socket": cores_val,
         })
 
     clusters = {}
@@ -303,6 +339,74 @@ def parse_file(file_bytes, site_name):
     if "esx hosts" in sheets_lower:
         return parse_liveoptics(xls, site_name)
     raise ValueError(f'"{site_name}" is not a recognised RVTools or LiveOptics export')
+
+
+# ─── License Calculator ───────────────────────────────────────────────────
+def calculate_licensing(sites, deployment_type):
+    """Calculate VCF/VVF foundation core licensing for all hosts."""
+    tib_per_core = 1.0 if deployment_type == "VCF" else 0.25
+    rows = []
+    total_cores = 0
+    total_tib = 0.0
+    missing_count = 0
+
+    for site in sites:
+        for cluster_name, hosts in site["clusters"].items():
+            for h in hosts:
+                sockets = h.get("sockets", 0)
+                cores_per_socket = h.get("cores_per_socket", 0)
+
+                if sockets == 0 or cores_per_socket == 0:
+                    missing_count += 1
+                    rows.append({
+                        "site": site["site_name"],
+                        "cluster": cluster_name,
+                        "hostname": h["hostname"],
+                        "sockets": sockets,
+                        "cores_per_socket": cores_per_socket,
+                        "foundation_cores": 0,
+                        "entitled_tib": 0.0,
+                        "missing": True,
+                    })
+                    continue
+
+                effective_cores = max(cores_per_socket, 16)
+                foundation_cores = sockets * effective_cores
+                entitled_tib = foundation_cores * tib_per_core
+
+                total_cores += foundation_cores
+                total_tib += entitled_tib
+
+                rows.append({
+                    "site": site["site_name"],
+                    "cluster": cluster_name,
+                    "hostname": h["hostname"],
+                    "sockets": sockets,
+                    "cores_per_socket": cores_per_socket,
+                    "foundation_cores": foundation_cores,
+                    "entitled_tib": entitled_tib,
+                    "missing": False,
+                })
+
+    return {
+        "rows": rows,
+        "total_cores": total_cores,
+        "total_tib": total_tib,
+        "missing_count": missing_count,
+        "deployment_type": deployment_type,
+        "tib_per_core": tib_per_core,
+    }
+
+
+def license_report_csv(report):
+    """Generate CSV content from a license report."""
+    lines = ["Site,Cluster,Hostname,Sockets,Cores per Socket,Foundation Cores,Entitled TiB"]
+    for r in report["rows"]:
+        fc = "" if r["missing"] else str(r["foundation_cores"])
+        et = "" if r["missing"] else f'{r["entitled_tib"]:.2f}'
+        lines.append(f'"{r["site"]}","{r["cluster"]}","{r["hostname"]}","{r["sockets"]}","{r["cores_per_socket"]}","{fc}","{et}"')
+    lines.append(f'"Total","","","","","{report["total_cores"]}","{report["total_tib"]:.2f}"')
+    return "\n".join(lines)
 
 
 # ─── Excalidraw generation ────────────────────────────────────────────────────
@@ -571,6 +675,20 @@ HTML = r"""<!DOCTYPE html>
     cursor: pointer; user-select: none;
   }
   #vcf9-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
+  #license-option {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 10px; font-size: 0.9rem; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  #license-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
+  #license-type-wrapper {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: 12px;
+  }
+  #license-type-wrapper select {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 8px; font-size: 0.85rem;
+    color: var(--text); outline: none; cursor: pointer;
+  }
 
   .btn {
     display: block; width: 100%; margin-top: 28px;
@@ -618,6 +736,15 @@ HTML = r"""<!DOCTYPE html>
   <div id="file-list"></div>
   <label id="vcf9-option">
     <input type="checkbox" id="vcf9-check"/> Check VCF 9 Compatibility (Broadcom Compatibility Guide)
+  </label>
+  <label id="license-option">
+    <input type="checkbox" id="license-check"/> VCF/VVF License Calculator
+    <span id="license-type-wrapper">
+      <select id="license-type">
+        <option value="VCF">VCF (1 TiB/core)</option>
+        <option value="VVF">VVF (0.25 TiB/core)</option>
+      </select>
+    </span>
   </label>
 
   <button class="btn" id="generate-btn" disabled onclick="generate()">
@@ -734,6 +861,10 @@ async function generate() {
   if (document.getElementById('vcf9-check').checked) {
     fd.append('vcf9', '1');
   }
+  if (document.getElementById('license-check').checked) {
+    fd.append('license', '1');
+    fd.append('license_type', document.getElementById('license-type').value);
+  }
 
   try {
     const res = await fetch('/generate', { method: 'POST', body: fd });
@@ -813,6 +944,19 @@ def generate():
     except (ValueError, KeyError, TypeError) as e:
         return f"Diagram generation error: {str(e)}", 500
 
+    # License calculation — return CSV alongside diagram if requested
+    license_field = request.form.get('license', '').lower()
+    if license_field in ('1', 'true', 'on', 'yes'):
+        deployment_type = request.form.get('license_type', 'VCF')
+        if deployment_type not in ('VCF', 'VVF'):
+            deployment_type = 'VCF'
+        report = calculate_licensing(sites, deployment_type)
+        csv_content = license_report_csv(report)
+        # Return as multipart: excalidraw JSON + license CSV
+        # For simplicity, return just the excalidraw file; CSV available via /license-csv
+        # Store the report for the CSV endpoint
+        app.config['_last_license_report'] = report
+
     buf = io.BytesIO(excalidraw_json.encode("utf-8"))
     buf.seek(0)
     return send_file(
@@ -820,6 +964,47 @@ def generate():
         mimetype="application/json",
         as_attachment=True,
         download_name="vmware_infrastructure.excalidraw",
+    )
+
+
+@app.route("/license-csv", methods=["POST"])
+def license_csv():
+    """Generate and download a license report CSV from uploaded files."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+
+    if not uploaded:
+        return "No files uploaded", 400
+
+    sites = []
+    for i, f in enumerate(uploaded):
+        ext = os.path.splitext(f.filename or '')[1].lower()
+        if ext != '.xlsx':
+            return f"Invalid file type: {f.filename}. Only .xlsx files are accepted.", 400
+        site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
+        try:
+            data = parse_file(f.read(), site_name)
+            sites.append(data)
+        except (ValueError, KeyError, pd.errors.ParserError) as e:
+            return f"Error parsing {f.filename}: {str(e)}", 400
+
+    if not sites:
+        return "No valid files found", 400
+
+    deployment_type = request.form.get('license_type', 'VCF')
+    if deployment_type not in ('VCF', 'VVF'):
+        deployment_type = 'VCF'
+
+    report = calculate_licensing(sites, deployment_type)
+    csv_content = license_report_csv(report)
+
+    buf = io.BytesIO(csv_content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"license_report_{deployment_type}.csv",
     )
 
 
