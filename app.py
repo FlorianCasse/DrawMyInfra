@@ -9,6 +9,7 @@ import json
 import os
 import uuid
 import re
+import urllib.request
 from flask import Flask, request, send_file, Response
 import pandas as pd
 
@@ -102,6 +103,84 @@ def fmt_pct(v):
         return f"{float(v):.0f}%"
     except (ValueError, TypeError):
         return str(v).strip() if v else "—"
+
+
+# ─── VCF 9 Compatibility (vSAN HCL) ──────────────────────────────────────────
+VENDOR_PATTERNS = [
+    (re.compile(r'PowerEdge|Dell|VRTX', re.I),              'Dell'),
+    (re.compile(r'ProLiant|Synergy|HPE|Edgeline', re.I),    'Hewlett Packard Enterprise'),
+    (re.compile(r'ThinkSystem|ThinkAgile|Lenovo', re.I),     'Lenovo'),
+    (re.compile(r'UCS[CS]\-|Cisco|HyperFlex', re.I),        'Cisco'),
+    (re.compile(r'PRIMERGY|Fujitsu', re.I),                  'Fujitsu'),
+    (re.compile(r'Hitachi', re.I),                           'Hitachi'),
+    (re.compile(r'Supermicro|SYS\-|Super\s*Server', re.I),  'Supermicro Computer, Inc'),
+    (re.compile(r'Quanta', re.I),                            'Quanta Cloud Technology (QCT)'),
+    (re.compile(r'ZTE', re.I),                               'ZTE'),
+    (re.compile(r'NEC', re.I),                               'NEC'),
+    (re.compile(r'xFusion', re.I),                           'xFusion'),
+]
+
+_hcl_cache = None
+
+
+def detect_vendor(model):
+    if not model:
+        return None
+    for pattern, vendor in VENDOR_PATTERNS:
+        if pattern.search(model):
+            return vendor
+    return None
+
+
+def fetch_hcl():
+    global _hcl_cache
+    if _hcl_cache is not None:
+        return _hcl_cache
+    url = 'https://vvs.broadcom.com/service/vsan/all.json'
+    req = urllib.request.Request(url, headers={'User-Agent': 'DrawMyInfra/1.0'})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        _hcl_cache = json.loads(resp.read().decode('utf-8'))
+    return _hcl_cache
+
+
+def build_vcf9_lookup(hcl_data):
+    vendors_ctrl = set()
+    vendors_nic = set()
+    items = hcl_data.get('data', {}).get('results', None) or hcl_data.get('results', None) or hcl_data
+    if not isinstance(items, list):
+        return set()
+
+    for entry in items:
+        vendor = entry.get('vcg_vendor_name', '') or entry.get('vendor', '')
+        releases = entry.get('releases', []) or entry.get('supported_releases', [])
+        has_esxi9 = False
+        for r in (releases if isinstance(releases, list) else []):
+            if isinstance(r, str):
+                if r.startswith('9.') or re.search(r'ESXi\s*9', r, re.I):
+                    has_esxi9 = True
+                    break
+            elif isinstance(r, dict) and r.get('version', '').startswith('9.'):
+                has_esxi9 = True
+                break
+        if not has_esxi9:
+            continue
+
+        cat = (entry.get('category', '') or entry.get('device_type', '')).lower()
+        if any(k in cat for k in ('controller', 'hba', 'raid', 'ahci')):
+            vendors_ctrl.add(vendor)
+        if any(k in cat for k in ('nic', 'network', 'ethernet', 'cna')):
+            vendors_nic.add(vendor)
+
+    return vendors_ctrl & vendors_nic
+
+
+def check_vcf9_compat(model, lookup):
+    vendor = detect_vendor(model)
+    if not vendor:
+        return {'status': 'unknown', 'label': '\u26A0\uFE0F VCF9 ?'}
+    if vendor in lookup:
+        return {'status': 'compatible', 'label': '\u2705 VCF9 Ready'}
+    return {'status': 'incompatible', 'label': '\u274C VCF9 N/A'}
 
 
 def parse_rvtools(xls, site_name):
@@ -331,10 +410,11 @@ def rect(id_, x, y, w, h, bg, stroke, text="", font_size=12, bold=False,
     return elements
 
 
-def generate_excalidraw(sites):
+def generate_excalidraw(sites, vcf9_enabled=False):
     """sites: list of dicts from parse_rvtools()"""
     elements = []
     x_cursor = CANVAS_X
+    host_h = 140 if vcf9_enabled else HOST_H
 
     for idx, site in enumerate(sites):
         p = PALETTES[idx % len(PALETTES)]
@@ -348,7 +428,7 @@ def generate_excalidraw(sites):
         zone_inner_y = HEADER_H + PAD
         for cname, chosts in clusters.items():
             rows = (len(chosts) + COLS - 1) // COLS
-            zone_inner_y += CLUSTER_H + PAD + rows * (HOST_H + ROW_GAP)
+            zone_inner_y += CLUSTER_H + PAD + rows * (host_h + ROW_GAP)
         zone_h = zone_inner_y + PAD
 
         # ── Site zone (background) ──
@@ -388,9 +468,9 @@ def generate_excalidraw(sites):
                 col_i = i % COLS
                 row_i = i // COLS
                 hx = x_cursor + PAD + col_i * (HOST_W + COL_GAP)
-                hy = cy + row_i * (HOST_H + ROW_GAP)
+                hy = cy + row_i * (host_h + ROW_GAP)
 
-                # Build 5-line label
+                # Build label
                 lines = [
                     h["hostname"],
                     h["model"] if h["model"] else "—",
@@ -398,19 +478,34 @@ def generate_excalidraw(sites):
                     f"ESXi {h['esxi']}" if h["esxi"] else "ESXi —",
                     f"VMs:{h['vms']}  CPU:{h['cpu']}  Mem:{h['mem']}",
                 ]
+                if vcf9_enabled and "vcf9" in h:
+                    lines.append(h["vcf9"]["label"])
                 label = "\n".join(lines)
 
+                stroke = p["host_stroke"]
+                if vcf9_enabled and "vcf9" in h and h["vcf9"]["status"] == "incompatible":
+                    stroke = "#E57373"
+
                 h_id = uid()
-                h_els = rect(h_id, hx, hy, HOST_W, HOST_H,
-                             bg=p["host_bg"], stroke=p["host_stroke"],
+                h_els = rect(h_id, hx, hy, HOST_W, host_h,
+                             bg=p["host_bg"], stroke=stroke,
                              text=label, font_size=9,
                              text_color=p["host_text"],
                              v_align="middle", rounded=6)
                 elements.extend(h_els)
 
-            cy += rows * (HOST_H + ROW_GAP) + PAD
+            cy += rows * (host_h + ROW_GAP) + PAD
 
         x_cursor += ZONE_W + ZONE_GAP
+
+    # VCF9 legend
+    if vcf9_enabled:
+        legend_text = "VCF 9 Compatibility\n\u2705 Ready \u2014 vendor in HCL\n\u274C N/A \u2014 vendor not in HCL\n\u26A0\uFE0F ? \u2014 vendor unknown"
+        legend_els = rect(uid(), x_cursor, CANVAS_Y, 220, 90,
+                          bg="#FFF9E6", stroke="#D4A017",
+                          text=legend_text, font_size=9,
+                          text_color="#4A4A00", v_align="middle", rounded=8)
+        elements.extend(legend_els)
 
     doc = {
         "type": "excalidraw",
@@ -507,6 +602,12 @@ HTML = r"""<!DOCTYPE html>
     transition: color .15s;
   }
   .remove-btn:hover { color: #e53e3e; }
+  #vcf9-option {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 18px; font-size: 0.9rem; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  #vcf9-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
 
   .btn {
     display: block; width: 100%; margin-top: 28px;
@@ -552,6 +653,9 @@ HTML = r"""<!DOCTYPE html>
   <input type="file" id="file-input" accept=".xlsx" multiple/>
 
   <div id="file-list"></div>
+  <label id="vcf9-option">
+    <input type="checkbox" id="vcf9-check"/> Check VCF 9 Compatibility (vSAN HCL)
+  </label>
 
   <button class="btn" id="generate-btn" disabled onclick="generate()">
     Generate Excalidraw Diagram
@@ -664,6 +768,9 @@ async function generate() {
     fd.append('files', item.file);
     fd.append('names', item.name || `Site${i+1}`);
   });
+  if (document.getElementById('vcf9-check').checked) {
+    fd.append('vcf9', '1');
+  }
 
   try {
     const res = await fetch('/generate', { method: 'POST', body: fd });
@@ -723,8 +830,23 @@ def generate():
     if not sites:
         return "No valid RVTools files found", 400
 
+    # VCF 9 compatibility check
+    vcf9_enabled = False
+    vcf9_field = request.form.get('vcf9', '').lower()
+    if vcf9_field in ('1', 'true', 'on', 'yes'):
+        try:
+            hcl_data = fetch_hcl()
+            vcf9_lookup = build_vcf9_lookup(hcl_data)
+            for site in sites:
+                for chosts in site["clusters"].values():
+                    for h in chosts:
+                        h["vcf9"] = check_vcf9_compat(h["model"], vcf9_lookup)
+            vcf9_enabled = True
+        except Exception:
+            pass  # graceful degradation — continue without VCF9
+
     try:
-        excalidraw_json = generate_excalidraw(sites)
+        excalidraw_json = generate_excalidraw(sites, vcf9_enabled=vcf9_enabled)
     except (ValueError, KeyError, TypeError) as e:
         return f"Diagram generation error: {str(e)}", 500
 

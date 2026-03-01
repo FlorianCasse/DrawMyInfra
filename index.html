@@ -98,6 +98,12 @@
     font-size: 1.1rem; color: var(--muted); transition: color .15s;
   }
   .remove-btn:hover { color: #e53e3e; }
+  #vcf9-option {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 18px; font-size: 0.9rem; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  #vcf9-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
   .btn {
     display: block; width: 100%; margin-top: 28px;
     padding: 14px 0; font-size: 1rem; font-weight: 700;
@@ -168,6 +174,9 @@
   </div>
   <input type="file" id="file-input" accept=".xlsx" multiple/>
   <div id="file-list"></div>
+  <label id="vcf9-option">
+    <input type="checkbox" id="vcf9-check"/> Check VCF 9 Compatibility (vSAN HCL)
+  </label>
   <button class="btn" id="generate-btn" disabled onclick="generate()">
     Generate Excalidraw Diagram
   </button>
@@ -241,6 +250,81 @@ function fmtPct(v) {
   const f = parseFloat(v);
   if (!isNaN(f)) return `${Math.round(f)}%`;
   return (v && String(v).trim()) ? String(v).trim() : '—';
+}
+
+// ── VCF 9 Compatibility (vSAN HCL) ──────────────────────────────────────────
+const VENDOR_PATTERNS = [
+  { pattern: /PowerEdge|Dell|VRTX/i,                    vendor: 'Dell' },
+  { pattern: /ProLiant|Synergy|HPE|Edgeline/i,          vendor: 'Hewlett Packard Enterprise' },
+  { pattern: /ThinkSystem|ThinkAgile|Lenovo/i,           vendor: 'Lenovo' },
+  { pattern: /UCS[CS]\-|Cisco|HyperFlex/i,              vendor: 'Cisco' },
+  { pattern: /PRIMERGY|Fujitsu/i,                        vendor: 'Fujitsu' },
+  { pattern: /Hitachi/i,                                 vendor: 'Hitachi' },
+  { pattern: /Supermicro|SYS\-|Super\s*Server/i,        vendor: 'Supermicro Computer, Inc' },
+  { pattern: /Quanta/i,                                  vendor: 'Quanta Cloud Technology (QCT)' },
+  { pattern: /ZTE/i,                                     vendor: 'ZTE' },
+  { pattern: /NEC/i,                                     vendor: 'NEC' },
+  { pattern: /xFusion/i,                                 vendor: 'xFusion' },
+];
+
+function detectVendor(model) {
+  if (!model) return null;
+  for (const { pattern, vendor } of VENDOR_PATTERNS) {
+    if (pattern.test(model)) return vendor;
+  }
+  return null;
+}
+
+let _hclCache = null;
+
+async function fetchHcl() {
+  if (_hclCache) return _hclCache;
+  const url = 'https://vvs.broadcom.com/service/vsan/all.json';
+  try {
+    const res = await fetch(url);
+    if (res.ok) { _hclCache = await res.json(); return _hclCache; }
+  } catch (_) { /* CORS blocked — try proxy */ }
+  const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(url);
+  const res2 = await fetch(proxyUrl);
+  if (!res2.ok) throw new Error('Failed to fetch vSAN HCL');
+  _hclCache = await res2.json();
+  return _hclCache;
+}
+
+function buildVcf9Lookup(hclData) {
+  const vendorsWithCtrl = new Set();
+  const vendorsWithNic  = new Set();
+  const items = hclData.data?.results || hclData.results || hclData;
+  if (!Array.isArray(items)) return new Set();
+
+  for (const entry of items) {
+    const vendor = entry.vcg_vendor_name || entry.vendor || '';
+    const releases = entry.releases || entry.supported_releases || [];
+    const hasEsxi9 = Array.isArray(releases) && releases.some(r =>
+      typeof r === 'string' ? /^9\./.test(r) || /ESXi\s*9/i.test(r)
+        : (r.version && /^9\./.test(r.version))
+    );
+    if (!hasEsxi9) continue;
+
+    const cat = (entry.category || entry.device_type || '').toLowerCase();
+    if (cat.includes('controller') || cat.includes('hba') || cat.includes('raid') || cat.includes('ahci'))
+      vendorsWithCtrl.add(vendor);
+    if (cat.includes('nic') || cat.includes('network') || cat.includes('ethernet') || cat.includes('cna'))
+      vendorsWithNic.add(vendor);
+  }
+
+  const ready = new Set();
+  for (const v of vendorsWithCtrl) {
+    if (vendorsWithNic.has(v)) ready.add(v);
+  }
+  return ready;
+}
+
+function checkVcf9Compat(model, lookup) {
+  const vendor = detectVendor(model);
+  if (!vendor)            return { status: 'unknown',      label: '\u26A0\uFE0F VCF9 ?' };
+  if (lookup.has(vendor)) return { status: 'compatible',   label: '\u2705 VCF9 Ready' };
+  return                         { status: 'incompatible', label: '\u274C VCF9 N/A' };
 }
 
 let xlsxLoadPromise = null;
@@ -443,9 +527,10 @@ function makeRect(id, x, y, w, h, bg, stroke, text = '', fontSize = 12,
 }
 
 // ── Excalidraw diagram generator ──────────────────────────────────────────────
-function generateExcalidraw(sites) {
+function generateExcalidraw(sites, vcf9Enabled) {
   const elements = [];
   let xCursor = CANVAS_X;
+  const hostH = vcf9Enabled ? 140 : HOST_H;
 
   for (let idx = 0; idx < sites.length; idx++) {
     const { site_name, clusters, vcenter_version, total_hosts, total_vms } = sites[idx];
@@ -454,7 +539,7 @@ function generateExcalidraw(sites) {
     // Zone height
     let innerH = HEADER_H + PAD;
     for (const chosts of Object.values(clusters)) {
-      innerH += CLUSTER_H + PAD + Math.ceil(chosts.length / COLS) * (HOST_H + ROW_GAP);
+      innerH += CLUSTER_H + PAD + Math.ceil(chosts.length / COLS) * (hostH + ROW_GAP);
     }
     const zoneH = innerH + PAD;
     const y0 = CANVAS_Y;
@@ -479,22 +564,38 @@ function generateExcalidraw(sites) {
       const rows = Math.ceil(chosts.length / COLS);
       chosts.forEach((h, i) => {
         const hx = xCursor + PAD + (i % COLS) * (HOST_W + COL_GAP);
-        const hy = cy + Math.floor(i / COLS) * (HOST_H + ROW_GAP);
-        const label = [
+        const hy = cy + Math.floor(i / COLS) * (hostH + ROW_GAP);
+        const lines = [
           h.hostname,
           h.model || '—',
           h.svc ? `SVC: ${h.svc}` : 'SVC: —',
           h.esxi ? `ESXi ${h.esxi}` : 'ESXi —',
           `VMs:${h.vms}  CPU:${h.cpu}  Mem:${h.mem}`,
-        ].join('\n');
-        elements.push(...makeRect(uid(), hx, hy, HOST_W, HOST_H,
-          p.host_bg, p.host_stroke, label, 9, false, p.host_text, 'middle', 6));
+        ];
+        if (vcf9Enabled && h.vcf9) lines.push(h.vcf9.label);
+        const label = lines.join('\n');
+
+        const stroke = (vcf9Enabled && h.vcf9 && h.vcf9.status === 'incompatible')
+          ? '#E57373' : p.host_stroke;
+        elements.push(...makeRect(uid(), hx, hy, HOST_W, hostH,
+          p.host_bg, stroke, label, 9, false, p.host_text, 'middle', 6));
       });
 
-      cy += rows * (HOST_H + ROW_GAP) + PAD;
+      cy += rows * (hostH + ROW_GAP) + PAD;
     }
 
     xCursor += ZONE_W + ZONE_GAP;
+  }
+
+  // VCF9 legend
+  if (vcf9Enabled) {
+    const legendX = xCursor;
+    const legendY = CANVAS_Y;
+    const legendW = 220;
+    const legendH = 90;
+    const legendText = 'VCF 9 Compatibility\n\u2705 Ready — vendor in HCL\n\u274C N/A — vendor not in HCL\n\u26A0\uFE0F ? — vendor unknown';
+    elements.push(...makeRect(uid(), legendX, legendY, legendW, legendH,
+      '#FFF9E6', '#D4A017', legendText, 9, false, '#4A4A00', 'middle', 8));
   }
 
   return { type: 'excalidraw', version: 2, source: 'https://excalidraw.com',
@@ -645,7 +746,31 @@ async function generate() {
       const buf = await readFile(item.file);
       sites.push(parseFile(buf, item.name || item.file.name));
     }
-    const doc = generateExcalidraw(sites);
+
+    const vcf9Enabled = document.getElementById('vcf9-check').checked;
+    let vcf9Lookup = null;
+    if (vcf9Enabled) {
+      try {
+        setStatus('Fetching vSAN HCL…', 'loading');
+        const hclData = await fetchHcl();
+        vcf9Lookup = buildVcf9Lookup(hclData);
+      } catch (e) {
+        setStatus('Warning: Could not fetch vSAN HCL — continuing without VCF9 check', 'err');
+        vcf9Lookup = null;
+      }
+    }
+
+    if (vcf9Enabled && vcf9Lookup) {
+      for (const site of sites) {
+        for (const chosts of Object.values(site.clusters)) {
+          for (const h of chosts) {
+            h.vcf9 = checkVcf9Compat(h.model, vcf9Lookup);
+          }
+        }
+      }
+    }
+
+    const doc = generateExcalidraw(sites, vcf9Enabled && !!vcf9Lookup);
     window.__excalidrawDoc = doc;
     document.dispatchEvent(new CustomEvent('diagram-ready'));
     setStatus('✓ Diagram ready — see preview below', 'ok');
