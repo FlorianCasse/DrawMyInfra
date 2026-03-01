@@ -104,6 +104,128 @@ def fmt_pct(v):
         return str(v).strip() if v else "—"
 
 
+# ─── VCF 9 Compatibility (Broadcom Compatibility Guide) ──────────────────────
+_hcl_cache = None
+_VENDOR_PREFIX_RE = re.compile(
+    r'^(Dell\s+(Inc\.?\s*)?|HPE?\s+|Lenovo\s+|Cisco\s+|Fujitsu\s+)', re.I
+)
+
+
+def load_hcl():
+    global _hcl_cache
+    if _hcl_cache is not None:
+        return _hcl_cache
+    hcl_path = os.path.join(os.path.dirname(__file__), 'vcf9_hcl.json')
+    with open(hcl_path, 'r') as f:
+        _hcl_cache = json.load(f)
+    return _hcl_cache
+
+
+def build_vcf9_lookup(hcl_data):
+    return {entry['m'].strip().lower(): entry['r'] for entry in hcl_data}
+
+
+def normalize_model(model):
+    return _VENDOR_PREFIX_RE.sub('', model).strip()
+
+
+def _vcf9_label(releases):
+    versions = sorted(r.replace('ESXi ', '') for r in releases)
+    return '\u2705 VCF ' + ' + '.join(versions) + ' Ready'
+
+
+def check_vcf9_compat(model, lookup):
+    if not model:
+        return {'status': 'unknown', 'label': '\u26A0\uFE0F VCF9 ?'}
+    norm = normalize_model(model).lower()
+    if norm in lookup:
+        return {'status': 'compatible', 'label': _vcf9_label(lookup[norm])}
+    for hcl_model, releases in lookup.items():
+        if norm in hcl_model or hcl_model in norm:
+            return {'status': 'compatible', 'label': _vcf9_label(releases)}
+    return {'status': 'incompatible', 'label': '\u274C Not VCF9 Ready'}
+
+
+def build_vcf9_report(sites):
+    """Build a VCF 9 readiness report from annotated sites."""
+    rows = []
+    compatible = incompatible = unknown = 0
+    for site in sites:
+        for cluster_name, hosts in site["clusters"].items():
+            for h in hosts:
+                vcf9 = h.get("vcf9", {"status": "unknown", "label": "N/A"})
+                rows.append({
+                    "site": site["site_name"],
+                    "cluster": cluster_name,
+                    "hostname": h["hostname"],
+                    "model": h.get("model", ""),
+                    "esxi": h.get("esxi", ""),
+                    "status": vcf9["status"],
+                    "label": vcf9["label"],
+                })
+                if vcf9["status"] == "compatible":
+                    compatible += 1
+                elif vcf9["status"] == "incompatible":
+                    incompatible += 1
+                else:
+                    unknown += 1
+    return {
+        "rows": rows,
+        "compatible": compatible,
+        "incompatible": incompatible,
+        "unknown": unknown,
+        "total": len(rows),
+    }
+
+
+def vcf9_report_csv(report):
+    """Generate CSV content from a VCF9 readiness report."""
+    lines = ["Site,Cluster,Hostname,Model,ESXi Version,VCF9 Status"]
+    for r in report["rows"]:
+        vals = [r["site"], r["cluster"], r["hostname"], r["model"], r["esxi"], r["label"]]
+        lines.append(",".join(f'"{v}"' for v in vals))
+    return "\n".join(lines)
+
+
+def vcf9_report_txt(report):
+    """Generate fixed-width text VCF9 readiness report."""
+    hdrs = ["SITE", "CLUSTER", "HOSTNAME", "MODEL", "ESXI_VERSION", "VCF9_STATUS"]
+    cols = [len(h) for h in hdrs]
+    for r in report["rows"]:
+        cols[0] = max(cols[0], len(r["site"]))
+        cols[1] = max(cols[1], len(r["cluster"]))
+        cols[2] = max(cols[2], len(r["hostname"]))
+        cols[3] = max(cols[3], len(r.get("model") or ""))
+        cols[4] = max(cols[4], len(r.get("esxi") or ""))
+        cols[5] = max(cols[5], len(r["label"]))
+
+    def pad(s, w):
+        return str(s).ljust(w)
+
+    hdr_line = " ".join(pad(h, cols[i]) for i, h in enumerate(hdrs))
+    sep_line = " ".join("-" * w for w in cols)
+
+    lines = [
+        "VCF 9 Readiness Report",
+        "",
+        f"Total: {report['total']}  |  Compatible: {report['compatible']}  |  Not Compatible: {report['incompatible']}  |  Unknown: {report['unknown']}",
+        "",
+        hdr_line,
+        sep_line,
+    ]
+    for r in report["rows"]:
+        lines.append(" ".join([
+            pad(r["site"], cols[0]),
+            pad(r["cluster"], cols[1]),
+            pad(r["hostname"], cols[2]),
+            pad(r.get("model") or "", cols[3]),
+            pad(r.get("esxi") or "", cols[4]),
+            pad(r["label"], cols[5]),
+        ]))
+    lines.append("")
+    return "\n".join(lines)
+
+
 def parse_rvtools(xls, site_name):
     """Parse an RVTools .xlsx file → structured dict."""
     sheet_names_lower = {s.lower(): s for s in xls.sheet_names}
@@ -123,6 +245,8 @@ def parse_rvtools(xls, site_name):
     col_cpu     = find_col(vh, ["CPU usage %", "CPU %", "CPU Usage %", "CPU%"])
     col_mem     = find_col(vh, ["Memory usage %", "Mem %", "Memory %", "Mem%"])
     col_svc     = find_col(vh, ["Service Tag", "Serial Number", "SN"])
+    col_sockets     = find_col(vh, ["# CPU", "CPUs", "CPU Sockets", "Sockets", "Num CPU"])
+    col_cores_cpu   = find_col(vh, ["Cores per CPU", "# Cores per CPU", "Cores Per Socket"])
 
     hosts = []
     for _, row in vh.iterrows():
@@ -143,6 +267,20 @@ def parse_rvtools(xls, site_name):
         if m:
             esxi_short = m.group(1)
 
+        # Socket / core counts for license calculator
+        sockets_val = 0
+        if col_sockets:
+            try:
+                sockets_val = int(float(safe(row[col_sockets])))
+            except (ValueError, TypeError):
+                pass
+        cores_val = 0
+        if col_cores_cpu:
+            try:
+                cores_val = int(float(safe(row[col_cores_cpu])))
+            except (ValueError, TypeError):
+                pass
+
         hosts.append({
             "hostname": hostname,
             "cluster":  cluster or "Default",
@@ -152,6 +290,8 @@ def parse_rvtools(xls, site_name):
             "cpu":      fmt_pct(cpu),
             "mem":      fmt_pct(mem),
             "svc":      svc,
+            "sockets":          sockets_val,
+            "cores_per_socket": cores_val,
         })
 
     # ── vSource sheet (vCenter version) ──
@@ -195,6 +335,9 @@ def parse_liveoptics(xls, site_name):
 
     hosts_df = xls.parse(hosts_sheet, header=0)
 
+    col_lo_sockets   = find_col(hosts_df, ["CPU Sockets", "Sockets"])
+    col_lo_cores_cpu = find_col(hosts_df, ["Cores Per Socket", "Cores per CPU"])
+
     # Performance sheet for CPU/Mem %
     perf_map = {}
     perf_sheet = sheet_names_lower.get("esx performance")
@@ -228,6 +371,19 @@ def parse_liveoptics(xls, site_name):
 
         perf = perf_map.get(hostname, {})
 
+        sockets_val = 0
+        if col_lo_sockets:
+            try:
+                sockets_val = int(float(safe(row[col_lo_sockets])))
+            except (ValueError, TypeError):
+                pass
+        cores_val = 0
+        if col_lo_cores_cpu:
+            try:
+                cores_val = int(float(safe(row[col_lo_cores_cpu])))
+            except (ValueError, TypeError):
+                pass
+
         hosts.append({
             "hostname": hostname,
             "cluster":  safe(row.get("Cluster", "")) or "Default",
@@ -237,6 +393,8 @@ def parse_liveoptics(xls, site_name):
             "cpu":      fmt_pct(perf.get("Average CPU %", "")),
             "mem":      fmt_pct(perf.get("Average Memory %", "")),
             "svc":      safe(row.get("Serial No", "")),
+            "sockets":          sockets_val,
+            "cores_per_socket": cores_val,
         })
 
     clusters = {}
@@ -261,6 +419,159 @@ def parse_file(file_bytes, site_name):
     if "esx hosts" in sheets_lower:
         return parse_liveoptics(xls, site_name)
     raise ValueError(f'"{site_name}" is not a recognised RVTools or LiveOptics export')
+
+
+# ─── License Calculator ───────────────────────────────────────────────────
+def calculate_licensing(sites, deployment_type):
+    """Calculate VCF/VVF foundation core licensing for all hosts."""
+    tib_per_core = 1.0 if deployment_type == "VCF" else 0.25
+    rows = []
+    total_cores = 0
+    total_tib = 0.0
+    missing_count = 0
+
+    for site in sites:
+        for cluster_name, hosts in site["clusters"].items():
+            for h in hosts:
+                sockets = h.get("sockets", 0)
+                cores_per_socket = h.get("cores_per_socket", 0)
+
+                if sockets == 0 or cores_per_socket == 0:
+                    missing_count += 1
+                    rows.append({
+                        "site": site["site_name"],
+                        "cluster": cluster_name,
+                        "hostname": h["hostname"],
+                        "sockets": sockets,
+                        "cores_per_socket": cores_per_socket,
+                        "foundation_cores": 0,
+                        "entitled_tib": 0.0,
+                        "missing": True,
+                    })
+                    continue
+
+                effective_cores = max(cores_per_socket, 16)
+                foundation_cores = sockets * effective_cores
+                entitled_tib = foundation_cores * tib_per_core
+
+                total_cores += foundation_cores
+                total_tib += entitled_tib
+
+                rows.append({
+                    "site": site["site_name"],
+                    "cluster": cluster_name,
+                    "hostname": h["hostname"],
+                    "sockets": sockets,
+                    "cores_per_socket": cores_per_socket,
+                    "foundation_cores": foundation_cores,
+                    "entitled_tib": entitled_tib,
+                    "missing": False,
+                })
+
+    return {
+        "rows": rows,
+        "total_cores": total_cores,
+        "total_tib": total_tib,
+        "missing_count": missing_count,
+        "deployment_type": deployment_type,
+        "tib_per_core": tib_per_core,
+    }
+
+
+def license_report_csv(report):
+    """Generate CSV content from a license report."""
+    lines = ["Site,Cluster,Hostname,Sockets,Cores per Socket,Foundation Cores,Entitled TiB"]
+    for r in report["rows"]:
+        fc = "" if r["missing"] else str(r["foundation_cores"])
+        et = "" if r["missing"] else f'{r["entitled_tib"]:.2f}'
+        lines.append(f'"{r["site"]}","{r["cluster"]}","{r["hostname"]}","{r["sockets"]}","{r["cores_per_socket"]}","{fc}","{et}"')
+    lines.append(f'"Total","","","","","{report["total_cores"]}","{report["total_tib"]:.2f}"')
+    return "\n".join(lines)
+
+
+def license_report_txt(report):
+    """Generate PowerShell-style fixed-width text report."""
+    dt = report["deployment_type"]
+    full_name = "VMware Cloud Foundation (VCF) Instance" if dt == "VCF" else "VMware vSphere Foundation (VVF)"
+
+    hdrs = ["CLUSTER", "VMHOST", "NUM_CPU_SOCKETS", "NUM_CPU_CORES_PER_SOCKET",
+            "FOUNDATION_LICENSE_CORE_COUNT", "VSAN_LICENSE_TIB_COUNT"]
+    cols = [len(h) for h in hdrs]
+    for r in report["rows"]:
+        cols[0] = max(cols[0], len(r["cluster"] or ""))
+        cols[1] = max(cols[1], len(r["hostname"] or ""))
+        cols[2] = max(cols[2], len(str(r["sockets"])))
+        cols[3] = max(cols[3], len(str(r["cores_per_socket"])))
+        fc = "-" if r["missing"] else str(r["foundation_cores"])
+        et = "-" if r["missing"] else f'{r["entitled_tib"]:.2f}'
+        cols[4] = max(cols[4], len(fc))
+        cols[5] = max(cols[5], len(et))
+    cols[0] = max(cols[0], 5)  # 'Total'
+    cols[4] = max(cols[4], len(str(report["total_cores"])))
+    cols[5] = max(cols[5], len(f'{report["total_tib"]:.2f}'))
+
+    def pad(s, w, right=False):
+        return str(s).rjust(w) if right else str(s).ljust(w)
+
+    hdr_line = " ".join(pad(h, cols[i], i >= 2) for i, h in enumerate(hdrs))
+    sep_line = " ".join("-" * w for w in cols)
+
+    lines = [
+        f"Sizing Results for {full_name}:",
+        "",
+        "Host Information",
+        "",
+        hdr_line,
+        sep_line,
+    ]
+
+    for r in report["rows"]:
+        fc = "-" if r["missing"] else str(r["foundation_cores"])
+        et = "-" if r["missing"] else f'{r["entitled_tib"]:.2f}'
+        lines.append(" ".join([
+            pad(r["cluster"] or "", cols[0]),
+            pad(r["hostname"] or "", cols[1]),
+            pad("-" if r["missing"] else r["sockets"], cols[2], True),
+            pad("-" if r["missing"] else r["cores_per_socket"], cols[3], True),
+            pad(fc, cols[4], True),
+            pad(et, cols[5], True),
+        ]))
+
+    lines.append(" ".join([
+        pad("Total", cols[0]),
+        pad("-", cols[1]),
+        pad("-", cols[2], True),
+        pad("-", cols[3], True),
+        pad(str(report["total_cores"]), cols[4], True),
+        pad(f'{report["total_tib"]:.2f}', cols[5], True),
+    ]))
+
+    # Cluster Information
+    lines += ["", "Cluster Information", ""]
+    cluster_tib = {}
+    for r in report["rows"]:
+        if not r["missing"]:
+            cluster_tib[r["cluster"]] = cluster_tib.get(r["cluster"], 0) + r["entitled_tib"]
+
+    c_hdr, t_hdr = "CLUSTER", "VSAN_ENTITLED_TIB"
+    cw0 = max(len(c_hdr), max((len(k) for k in cluster_tib), default=0), 5)
+    cw1 = max(len(t_hdr), max((len(f"{v:.2f}") for v in cluster_tib.values()), default=0),
+              len(f'{report["total_tib"]:.2f}'))
+    lines.append(f"{c_hdr.ljust(cw0)} {t_hdr.rjust(cw1)}")
+    lines.append(f"{'-' * cw0} {'-' * cw1}")
+    cluster_tib_total = 0
+    for name, tib in cluster_tib.items():
+        lines.append(f"{name.ljust(cw0)} {f'{tib:.2f}'.rjust(cw1)}")
+        cluster_tib_total += tib
+    lines.append(f"{'Total'.ljust(cw0)} {f'{cluster_tib_total:.2f}'.rjust(cw1)}")
+
+    lines += [
+        "",
+        f"Total Required {dt} Compute Licenses: {report['total_cores']}",
+        f"Total Required vSAN Add-on Licenses: N/A (requires actual vSAN capacity data)",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 # ─── Excalidraw generation ────────────────────────────────────────────────────
@@ -331,10 +642,11 @@ def rect(id_, x, y, w, h, bg, stroke, text="", font_size=12, bold=False,
     return elements
 
 
-def generate_excalidraw(sites):
+def generate_excalidraw(sites, vcf9_enabled=False):
     """sites: list of dicts from parse_rvtools()"""
     elements = []
     x_cursor = CANVAS_X
+    host_h = 140 if vcf9_enabled else HOST_H
 
     for idx, site in enumerate(sites):
         p = PALETTES[idx % len(PALETTES)]
@@ -348,7 +660,7 @@ def generate_excalidraw(sites):
         zone_inner_y = HEADER_H + PAD
         for cname, chosts in clusters.items():
             rows = (len(chosts) + COLS - 1) // COLS
-            zone_inner_y += CLUSTER_H + PAD + rows * (HOST_H + ROW_GAP)
+            zone_inner_y += CLUSTER_H + PAD + rows * (host_h + ROW_GAP)
         zone_h = zone_inner_y + PAD
 
         # ── Site zone (background) ──
@@ -388,9 +700,9 @@ def generate_excalidraw(sites):
                 col_i = i % COLS
                 row_i = i // COLS
                 hx = x_cursor + PAD + col_i * (HOST_W + COL_GAP)
-                hy = cy + row_i * (HOST_H + ROW_GAP)
+                hy = cy + row_i * (host_h + ROW_GAP)
 
-                # Build 5-line label
+                # Build label
                 lines = [
                     h["hostname"],
                     h["model"] if h["model"] else "—",
@@ -398,19 +710,34 @@ def generate_excalidraw(sites):
                     f"ESXi {h['esxi']}" if h["esxi"] else "ESXi —",
                     f"VMs:{h['vms']}  CPU:{h['cpu']}  Mem:{h['mem']}",
                 ]
+                if vcf9_enabled and "vcf9" in h:
+                    lines.append(h["vcf9"]["label"])
                 label = "\n".join(lines)
 
+                stroke = p["host_stroke"]
+                if vcf9_enabled and "vcf9" in h and h["vcf9"]["status"] == "incompatible":
+                    stroke = "#E57373"
+
                 h_id = uid()
-                h_els = rect(h_id, hx, hy, HOST_W, HOST_H,
-                             bg=p["host_bg"], stroke=p["host_stroke"],
+                h_els = rect(h_id, hx, hy, HOST_W, host_h,
+                             bg=p["host_bg"], stroke=stroke,
                              text=label, font_size=9,
                              text_color=p["host_text"],
                              v_align="middle", rounded=6)
                 elements.extend(h_els)
 
-            cy += rows * (HOST_H + ROW_GAP) + PAD
+            cy += rows * (host_h + ROW_GAP) + PAD
 
         x_cursor += ZONE_W + ZONE_GAP
+
+    # VCF9 legend
+    if vcf9_enabled:
+        legend_text = "VCF 9 Compatibility\n\u2705 VCF x.x Ready\n\u274C Not VCF9 Ready\n\u26A0\uFE0F VCF9 ? \u2014 model unknown"
+        legend_els = rect(uid(), x_cursor, CANVAS_Y, 220, 90,
+                          bg="#FFF9E6", stroke="#D4A017",
+                          text=legend_text, font_size=9,
+                          text_color="#4A4A00", v_align="middle", rounded=8)
+        elements.extend(legend_els)
 
     doc = {
         "type": "excalidraw",
@@ -507,6 +834,26 @@ HTML = r"""<!DOCTYPE html>
     transition: color .15s;
   }
   .remove-btn:hover { color: #e53e3e; }
+  #vcf9-option {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 18px; font-size: 0.9rem; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  #vcf9-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
+  #license-option {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 10px; font-size: 0.9rem; color: var(--text);
+    cursor: pointer; user-select: none;
+  }
+  #license-option input { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
+  #license-type-wrapper {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: 12px;
+  }
+  #license-type-wrapper select {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 8px; font-size: 0.85rem;
+    color: var(--text); outline: none; cursor: pointer;
+  }
 
   .btn {
     display: block; width: 100%; margin-top: 28px;
@@ -552,6 +899,18 @@ HTML = r"""<!DOCTYPE html>
   <input type="file" id="file-input" accept=".xlsx" multiple/>
 
   <div id="file-list"></div>
+  <label id="vcf9-option">
+    <input type="checkbox" id="vcf9-check"/> Check VCF 9 Compatibility (Broadcom Compatibility Guide)
+  </label>
+  <label id="license-option">
+    <input type="checkbox" id="license-check"/> VCF/VVF License Calculator
+    <span id="license-type-wrapper">
+      <select id="license-type">
+        <option value="VCF">VCF (1 TiB/core)</option>
+        <option value="VVF">VVF (0.25 TiB/core)</option>
+      </select>
+    </span>
+  </label>
 
   <button class="btn" id="generate-btn" disabled onclick="generate()">
     Generate Excalidraw Diagram
@@ -664,6 +1023,13 @@ async function generate() {
     fd.append('files', item.file);
     fd.append('names', item.name || `Site${i+1}`);
   });
+  if (document.getElementById('vcf9-check').checked) {
+    fd.append('vcf9', '1');
+  }
+  if (document.getElementById('license-check').checked) {
+    fd.append('license', '1');
+    fd.append('license_type', document.getElementById('license-type').value);
+  }
 
   try {
     const res = await fetch('/generate', { method: 'POST', body: fd });
@@ -723,10 +1089,38 @@ def generate():
     if not sites:
         return "No valid RVTools files found", 400
 
+    # VCF 9 compatibility check
+    vcf9_enabled = False
+    vcf9_field = request.form.get('vcf9', '').lower()
+    if vcf9_field in ('1', 'true', 'on', 'yes'):
+        try:
+            hcl_data = load_hcl()
+            vcf9_lookup = build_vcf9_lookup(hcl_data)
+            for site in sites:
+                for chosts in site["clusters"].values():
+                    for h in chosts:
+                        h["vcf9"] = check_vcf9_compat(h["model"], vcf9_lookup)
+            vcf9_enabled = True
+        except Exception:
+            pass  # graceful degradation — continue without VCF9
+
     try:
-        excalidraw_json = generate_excalidraw(sites)
+        excalidraw_json = generate_excalidraw(sites, vcf9_enabled=vcf9_enabled)
     except (ValueError, KeyError, TypeError) as e:
         return f"Diagram generation error: {str(e)}", 500
+
+    # License calculation — return CSV alongside diagram if requested
+    license_field = request.form.get('license', '').lower()
+    if license_field in ('1', 'true', 'on', 'yes'):
+        deployment_type = request.form.get('license_type', 'VCF')
+        if deployment_type not in ('VCF', 'VVF'):
+            deployment_type = 'VCF'
+        report = calculate_licensing(sites, deployment_type)
+        csv_content = license_report_csv(report)
+        # Return as multipart: excalidraw JSON + license CSV
+        # For simplicity, return just the excalidraw file; CSV available via /license-csv
+        # Store the report for the CSV endpoint
+        app.config['_last_license_report'] = report
 
     buf = io.BytesIO(excalidraw_json.encode("utf-8"))
     buf.seek(0)
@@ -736,6 +1130,148 @@ def generate():
         as_attachment=True,
         download_name="vmware_infrastructure.excalidraw",
     )
+
+
+@app.route("/license-csv", methods=["POST"])
+def license_csv():
+    """Generate and download a license report CSV from uploaded files."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+
+    if not uploaded:
+        return "No files uploaded", 400
+
+    sites = []
+    for i, f in enumerate(uploaded):
+        ext = os.path.splitext(f.filename or '')[1].lower()
+        if ext != '.xlsx':
+            return f"Invalid file type: {f.filename}. Only .xlsx files are accepted.", 400
+        site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
+        try:
+            data = parse_file(f.read(), site_name)
+            sites.append(data)
+        except (ValueError, KeyError, pd.errors.ParserError) as e:
+            return f"Error parsing {f.filename}: {str(e)}", 400
+
+    if not sites:
+        return "No valid files found", 400
+
+    deployment_type = request.form.get('license_type', 'VCF')
+    if deployment_type not in ('VCF', 'VVF'):
+        deployment_type = 'VCF'
+
+    report = calculate_licensing(sites, deployment_type)
+    csv_content = license_report_csv(report)
+
+    buf = io.BytesIO(csv_content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"license_report_{deployment_type}.csv",
+    )
+
+
+@app.route("/license-txt", methods=["POST"])
+def license_txt():
+    """Generate and download a license report TXT from uploaded files."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+
+    if not uploaded:
+        return "No files uploaded", 400
+
+    sites = []
+    for i, f in enumerate(uploaded):
+        ext = os.path.splitext(f.filename or '')[1].lower()
+        if ext != '.xlsx':
+            return f"Invalid file type: {f.filename}. Only .xlsx files are accepted.", 400
+        site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
+        try:
+            data = parse_file(f.read(), site_name)
+            sites.append(data)
+        except (ValueError, KeyError, pd.errors.ParserError) as e:
+            return f"Error parsing {f.filename}: {str(e)}", 400
+
+    if not sites:
+        return "No valid files found", 400
+
+    deployment_type = request.form.get('license_type', 'VCF')
+    if deployment_type not in ('VCF', 'VVF'):
+        deployment_type = 'VCF'
+
+    report = calculate_licensing(sites, deployment_type)
+    txt_content = license_report_txt(report)
+
+    buf = io.BytesIO(txt_content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="text/plain",
+        as_attachment=True,
+        download_name=f"license_report_{deployment_type}.txt",
+    )
+
+
+def _parse_sites_for_vcf9(uploaded, names):
+    """Shared helper: parse uploaded files and annotate VCF9 compatibility."""
+    sites = []
+    for i, f in enumerate(uploaded):
+        ext = os.path.splitext(f.filename or '')[1].lower()
+        if ext != '.xlsx':
+            return None, f"Invalid file type: {f.filename}. Only .xlsx files are accepted."
+        site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
+        try:
+            data = parse_file(f.read(), site_name)
+            sites.append(data)
+        except (ValueError, KeyError, pd.errors.ParserError) as e:
+            return None, f"Error parsing {f.filename}: {str(e)}"
+    if not sites:
+        return None, "No valid files found"
+    hcl_data = load_hcl()
+    vcf9_lookup = build_vcf9_lookup(hcl_data)
+    for site in sites:
+        for chosts in site["clusters"].values():
+            for h in chosts:
+                h["vcf9"] = check_vcf9_compat(h["model"], vcf9_lookup)
+    return sites, None
+
+
+@app.route("/vcf9-csv", methods=["POST"])
+def vcf9_csv():
+    """Generate and download a VCF9 readiness report CSV."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+    if not uploaded:
+        return "No files uploaded", 400
+    sites, err = _parse_sites_for_vcf9(uploaded, names)
+    if err:
+        return err, 400
+    report = build_vcf9_report(sites)
+    content = vcf9_report_csv(report)
+    buf = io.BytesIO(content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(buf, mimetype="text/csv", as_attachment=True,
+                     download_name="vcf9_readiness_report.csv")
+
+
+@app.route("/vcf9-txt", methods=["POST"])
+def vcf9_txt():
+    """Generate and download a VCF9 readiness report TXT."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+    if not uploaded:
+        return "No files uploaded", 400
+    sites, err = _parse_sites_for_vcf9(uploaded, names)
+    if err:
+        return err, 400
+    report = build_vcf9_report(sites)
+    content = vcf9_report_txt(report)
+    buf = io.BytesIO(content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(buf, mimetype="text/plain", as_attachment=True,
+                     download_name="vcf9_readiness_report.txt")
 
 
 if __name__ == "__main__":
