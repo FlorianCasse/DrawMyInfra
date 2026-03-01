@@ -227,6 +227,15 @@
     margin-bottom: 14px;
   }
   .license-actions h2 { font-size: 1.1rem; font-weight: 700; color: var(--brand-dark); flex: 1; }
+
+  /* ── VCF9 Readiness Report (reuses license-table / license-summary-box) ── */
+  #vcf9-section {
+    width: 100%; max-width: 1300px;
+    margin-top: 32px;
+  }
+  .vcf9-compatible  { color: #2d8a4e; }
+  .vcf9-incompatible { color: #e53e3e; }
+  .vcf9-unknown     { color: #b8860b; }
 </style>
 </head>
 <body>
@@ -283,6 +292,22 @@
     This cannot be determined from RVTools/LiveOptics data alone — verify against your actual vSAN capacity.
     <br>Formula: Foundation Cores = Sockets × max(Cores per Socket, 16) &nbsp;|&nbsp;
     Ref: <a href="https://knowledge.broadcom.com/external/article?legacyId=313548" target="_blank">KB 313548</a>
+  </div>
+</div>
+
+<div id="vcf9-section" hidden>
+  <div class="license-actions">
+    <h2>VCF 9 Readiness Report</h2>
+    <button id="vcf9-txt-btn" class="btn-outline">Download TXT</button>
+    <button id="vcf9-csv-btn" class="btn-outline">Download CSV</button>
+  </div>
+  <div id="vcf9-summary"></div>
+  <div class="license-table-wrapper">
+    <div id="vcf9-table-container"></div>
+  </div>
+  <div class="license-note">
+    Hosts are checked against the <a href="https://compatibilityguide.broadcom.com/" target="_blank">Broadcom Compatibility Guide</a>.
+    Vendor prefixes (Dell, HPE, Lenovo, ...) are stripped before matching.
   </div>
 </div>
 
@@ -896,6 +921,138 @@ function renderLicenseReport() {
   container.innerHTML = html;
 }
 
+// ── VCF 9 Readiness Report ────────────────────────────────────────────────
+function buildVcf9Report(sites) {
+  const rows = [];
+  let compatible = 0, incompatible = 0, unknown = 0;
+
+  for (const site of sites) {
+    for (const [cluster, hosts] of Object.entries(site.clusters)) {
+      for (const h of hosts) {
+        const vcf9 = h.vcf9 || { status: 'unknown', label: 'N/A' };
+        rows.push({
+          site: site.site_name, cluster, hostname: h.hostname,
+          model: h.model || '', esxi: h.esxi || '',
+          status: vcf9.status, label: vcf9.label,
+        });
+        if (vcf9.status === 'compatible') compatible++;
+        else if (vcf9.status === 'incompatible') incompatible++;
+        else unknown++;
+      }
+    }
+  }
+
+  return { rows, compatible, incompatible, unknown, total: rows.length };
+}
+
+function renderVcf9Report() {
+  const report = window.__vcf9Report;
+  const section = document.getElementById('vcf9-section');
+  if (!report) { section.hidden = true; return; }
+  section.hidden = false;
+
+  // Summary
+  const summary = document.getElementById('vcf9-summary');
+  summary.innerHTML = `<div class="license-summary-box">
+    <div class="summary-item"><span class="summary-label">Total Hosts</span><span class="summary-value">${report.total}</span></div>
+    <div class="summary-item"><span class="summary-label">Compatible</span><span class="summary-value vcf9-compatible">${report.compatible}</span></div>
+    <div class="summary-item"><span class="summary-label">Not Compatible</span><span class="summary-value vcf9-incompatible">${report.incompatible}</span></div>
+    <div class="summary-item"><span class="summary-label">Unknown</span><span class="summary-value vcf9-unknown">${report.unknown}</span></div>
+  </div>`;
+
+  // Table
+  const container = document.getElementById('vcf9-table-container');
+  let html = `<table class="license-table">
+    <thead><tr>
+      <th>Site</th><th>Cluster</th><th>Hostname</th>
+      <th>Model</th><th>ESXi</th><th>VCF 9 Status</th>
+    </tr></thead><tbody>`;
+
+  for (const r of report.rows) {
+    const cls = r.status === 'compatible' ? 'vcf9-compatible'
+              : r.status === 'incompatible' ? 'vcf9-incompatible' : 'vcf9-unknown';
+    html += `<tr>
+      <td>${r.site}</td><td>${r.cluster}</td><td>${r.hostname}</td>
+      <td>${r.model || '—'}</td><td>${r.esxi || '—'}</td>
+      <td class="${cls}">${r.label}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+  container.innerHTML = html;
+}
+
+function generateVcf9Txt(report) {
+  const hdrs = ['SITE', 'CLUSTER', 'HOSTNAME', 'MODEL', 'ESXI_VERSION', 'VCF9_STATUS'];
+  const cols = hdrs.map(h => h.length);
+  for (const r of report.rows) {
+    cols[0] = Math.max(cols[0], r.site.length);
+    cols[1] = Math.max(cols[1], r.cluster.length);
+    cols[2] = Math.max(cols[2], r.hostname.length);
+    cols[3] = Math.max(cols[3], (r.model || '').length);
+    cols[4] = Math.max(cols[4], (r.esxi || '').length);
+    cols[5] = Math.max(cols[5], r.label.length);
+  }
+
+  const pad = (s, w) => String(s).padEnd(w);
+  const hdrLine = hdrs.map((h, i) => pad(h, cols[i])).join(' ');
+  const sep = cols.map(w => '-'.repeat(w)).join(' ');
+
+  const lines = [
+    'VCF 9 Readiness Report',
+    '',
+    `Total: ${report.total}  |  Compatible: ${report.compatible}  |  Not Compatible: ${report.incompatible}  |  Unknown: ${report.unknown}`,
+    '',
+    hdrLine,
+    sep,
+  ];
+
+  for (const r of report.rows) {
+    lines.push([
+      pad(r.site, cols[0]),
+      pad(r.cluster, cols[1]),
+      pad(r.hostname, cols[2]),
+      pad(r.model || '', cols[3]),
+      pad(r.esxi || '', cols[4]),
+      pad(r.label, cols[5]),
+    ].join(' '));
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+function generateVcf9Csv(report) {
+  const lines = ['Site,Cluster,Hostname,Model,ESXi Version,VCF9 Status'];
+  for (const r of report.rows) {
+    lines.push([r.site, r.cluster, r.hostname, r.model, r.esxi, r.label]
+      .map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+  }
+  return lines.join('\n');
+}
+
+document.getElementById('vcf9-txt-btn').addEventListener('click', () => {
+  const report = window.__vcf9Report;
+  if (!report) return;
+  const txt = generateVcf9Txt(report);
+  const blob = new Blob([txt], { type: 'text/plain' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob), download: 'vcf9_readiness_report.txt',
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('vcf9-csv-btn').addEventListener('click', () => {
+  const report = window.__vcf9Report;
+  if (!report) return;
+  const csv = generateVcf9Csv(report);
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob), download: 'vcf9_readiness_report.csv',
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 function generateLicenseTxt(report) {
   const dt = report.deploymentType;
   const fullName = dt === 'VCF' ? 'VMware Cloud Foundation (VCF) Instance' : 'VMware vSphere Foundation (VVF)';
@@ -1054,6 +1211,15 @@ async function generate() {
     const doc = generateExcalidraw(sites, vcf9Enabled && !!vcf9Lookup);
     window.__excalidrawDoc = doc;
     document.dispatchEvent(new CustomEvent('diagram-ready'));
+
+    // VCF 9 Readiness Report
+    if (vcf9Enabled && vcf9Lookup) {
+      window.__vcf9Report = buildVcf9Report(sites);
+      renderVcf9Report();
+    } else {
+      window.__vcf9Report = null;
+      document.getElementById('vcf9-section').hidden = true;
+    }
 
     // License Calculator
     const licenseEnabled = document.getElementById('license-check').checked;

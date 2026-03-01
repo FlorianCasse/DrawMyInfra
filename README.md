@@ -37,6 +37,8 @@ Tick the **Check VCF 9 Compatibility** checkbox before generating to check each 
 
 Incompatible hosts are highlighted with a red border in the diagram.
 
+A **VCF 9 Readiness Report** is also generated as a table with per-host compatibility status, summary counts, and downloadable TXT/CSV exports.
+
 ### VCF/VVF License Calculator
 
 Tick the **VCF/VVF License Calculator** checkbox and select a deployment type (VCF or VVF) to calculate foundation core licensing from your uploaded data — no need to connect to vCenter or run PowerCLI.

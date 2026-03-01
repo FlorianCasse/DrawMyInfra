@@ -146,6 +146,86 @@ def check_vcf9_compat(model, lookup):
     return {'status': 'incompatible', 'label': '\u274C Not VCF9 Ready'}
 
 
+def build_vcf9_report(sites):
+    """Build a VCF 9 readiness report from annotated sites."""
+    rows = []
+    compatible = incompatible = unknown = 0
+    for site in sites:
+        for cluster_name, hosts in site["clusters"].items():
+            for h in hosts:
+                vcf9 = h.get("vcf9", {"status": "unknown", "label": "N/A"})
+                rows.append({
+                    "site": site["site_name"],
+                    "cluster": cluster_name,
+                    "hostname": h["hostname"],
+                    "model": h.get("model", ""),
+                    "esxi": h.get("esxi", ""),
+                    "status": vcf9["status"],
+                    "label": vcf9["label"],
+                })
+                if vcf9["status"] == "compatible":
+                    compatible += 1
+                elif vcf9["status"] == "incompatible":
+                    incompatible += 1
+                else:
+                    unknown += 1
+    return {
+        "rows": rows,
+        "compatible": compatible,
+        "incompatible": incompatible,
+        "unknown": unknown,
+        "total": len(rows),
+    }
+
+
+def vcf9_report_csv(report):
+    """Generate CSV content from a VCF9 readiness report."""
+    lines = ["Site,Cluster,Hostname,Model,ESXi Version,VCF9 Status"]
+    for r in report["rows"]:
+        vals = [r["site"], r["cluster"], r["hostname"], r["model"], r["esxi"], r["label"]]
+        lines.append(",".join(f'"{v}"' for v in vals))
+    return "\n".join(lines)
+
+
+def vcf9_report_txt(report):
+    """Generate fixed-width text VCF9 readiness report."""
+    hdrs = ["SITE", "CLUSTER", "HOSTNAME", "MODEL", "ESXI_VERSION", "VCF9_STATUS"]
+    cols = [len(h) for h in hdrs]
+    for r in report["rows"]:
+        cols[0] = max(cols[0], len(r["site"]))
+        cols[1] = max(cols[1], len(r["cluster"]))
+        cols[2] = max(cols[2], len(r["hostname"]))
+        cols[3] = max(cols[3], len(r.get("model") or ""))
+        cols[4] = max(cols[4], len(r.get("esxi") or ""))
+        cols[5] = max(cols[5], len(r["label"]))
+
+    def pad(s, w):
+        return str(s).ljust(w)
+
+    hdr_line = " ".join(pad(h, cols[i]) for i, h in enumerate(hdrs))
+    sep_line = " ".join("-" * w for w in cols)
+
+    lines = [
+        "VCF 9 Readiness Report",
+        "",
+        f"Total: {report['total']}  |  Compatible: {report['compatible']}  |  Not Compatible: {report['incompatible']}  |  Unknown: {report['unknown']}",
+        "",
+        hdr_line,
+        sep_line,
+    ]
+    for r in report["rows"]:
+        lines.append(" ".join([
+            pad(r["site"], cols[0]),
+            pad(r["cluster"], cols[1]),
+            pad(r["hostname"], cols[2]),
+            pad(r.get("model") or "", cols[3]),
+            pad(r.get("esxi") or "", cols[4]),
+            pad(r["label"], cols[5]),
+        ]))
+    lines.append("")
+    return "\n".join(lines)
+
+
 def parse_rvtools(xls, site_name):
     """Parse an RVTools .xlsx file → structured dict."""
     sheet_names_lower = {s.lower(): s for s in xls.sheet_names}
@@ -1132,6 +1212,66 @@ def license_txt():
         as_attachment=True,
         download_name=f"license_report_{deployment_type}.txt",
     )
+
+
+def _parse_sites_for_vcf9(uploaded, names):
+    """Shared helper: parse uploaded files and annotate VCF9 compatibility."""
+    sites = []
+    for i, f in enumerate(uploaded):
+        ext = os.path.splitext(f.filename or '')[1].lower()
+        if ext != '.xlsx':
+            return None, f"Invalid file type: {f.filename}. Only .xlsx files are accepted."
+        site_name = names[i] if i < len(names) else f.filename.replace(".xlsx", "")
+        try:
+            data = parse_file(f.read(), site_name)
+            sites.append(data)
+        except (ValueError, KeyError, pd.errors.ParserError) as e:
+            return None, f"Error parsing {f.filename}: {str(e)}"
+    if not sites:
+        return None, "No valid files found"
+    hcl_data = load_hcl()
+    vcf9_lookup = build_vcf9_lookup(hcl_data)
+    for site in sites:
+        for chosts in site["clusters"].values():
+            for h in chosts:
+                h["vcf9"] = check_vcf9_compat(h["model"], vcf9_lookup)
+    return sites, None
+
+
+@app.route("/vcf9-csv", methods=["POST"])
+def vcf9_csv():
+    """Generate and download a VCF9 readiness report CSV."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+    if not uploaded:
+        return "No files uploaded", 400
+    sites, err = _parse_sites_for_vcf9(uploaded, names)
+    if err:
+        return err, 400
+    report = build_vcf9_report(sites)
+    content = vcf9_report_csv(report)
+    buf = io.BytesIO(content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(buf, mimetype="text/csv", as_attachment=True,
+                     download_name="vcf9_readiness_report.csv")
+
+
+@app.route("/vcf9-txt", methods=["POST"])
+def vcf9_txt():
+    """Generate and download a VCF9 readiness report TXT."""
+    uploaded = request.files.getlist("files")
+    names = request.form.getlist("names")
+    if not uploaded:
+        return "No files uploaded", 400
+    sites, err = _parse_sites_for_vcf9(uploaded, names)
+    if err:
+        return err, 400
+    report = build_vcf9_report(sites)
+    content = vcf9_report_txt(report)
+    buf = io.BytesIO(content.encode("utf-8"))
+    buf.seek(0)
+    return send_file(buf, mimetype="text/plain", as_attachment=True,
+                     download_name="vcf9_readiness_report.txt")
 
 
 if __name__ == "__main__":
