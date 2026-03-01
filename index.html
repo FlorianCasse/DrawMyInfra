@@ -126,10 +126,29 @@
     vertical-align: middle; margin-right: 6px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  #preview-section {
+  #results-section {
     width: 100%; max-width: 1300px;
     margin-top: 32px;
   }
+  .tab-bar {
+    display: flex; gap: 4px;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 18px;
+  }
+  .tab-btn {
+    background: transparent; border: none;
+    border-bottom: 3px solid transparent;
+    padding: 10px 20px; font-size: 0.95rem;
+    color: var(--muted); cursor: pointer;
+    font-family: inherit; transition: color .2s, border-color .2s;
+  }
+  .tab-btn:hover { color: var(--brand-dark); }
+  .tab-btn.active {
+    border-bottom-color: var(--primary);
+    color: var(--brand-dark); font-weight: 700;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
   .preview-header {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 12px;
@@ -175,10 +194,6 @@
     padding: 3px 8px; font-size: 0.85rem;
     color: var(--text); background: var(--input-bg);
     outline: none; cursor: pointer;
-  }
-  #license-section {
-    width: 100%; max-width: 1300px;
-    margin-top: 32px;
   }
   .license-summary-box {
     background: var(--card); border: 1px solid var(--border);
@@ -229,10 +244,6 @@
   .license-actions h2 { font-size: 1.1rem; font-weight: 700; color: var(--brand-dark); flex: 1; }
 
   /* ── VCF9 Readiness Report (reuses license-table / license-summary-box) ── */
-  #vcf9-section {
-    width: 100%; max-width: 1300px;
-    margin-top: 32px;
-  }
   .vcf9-compatible  { color: #2d8a4e; }
   .vcf9-incompatible { color: #e53e3e; }
   .vcf9-unknown     { color: #b8860b; }
@@ -269,45 +280,53 @@
   <div id="status"></div>
 </div>
 
-<div id="preview-section" hidden>
-  <div class="preview-header">
-    <h2>Diagram Preview</h2>
-    <button id="download-btn" class="btn-outline">Download .excalidraw</button>
-  </div>
-  <div id="excalidraw-mount"></div>
-</div>
+<div id="results-section" hidden>
+  <div class="tab-bar" id="tab-bar"></div>
 
-<div id="license-section" hidden>
-  <div class="license-actions">
-    <h2>VCF/VVF License Report</h2>
-    <button id="license-txt-btn" class="btn-outline">Download TXT</button>
-    <button id="license-csv-btn" class="btn-outline">Download CSV</button>
+  <div id="tab-diagram" class="tab-panel">
+    <div class="preview-header">
+      <h2>Diagram Preview</h2>
+      <button id="download-btn" class="btn-outline">Download .excalidraw</button>
+    </div>
+    <div id="excalidraw-mount"></div>
   </div>
-  <div id="license-summary"></div>
-  <div class="license-table-wrapper">
-    <div id="license-table-container"></div>
-  </div>
-  <div class="license-note">
-    <strong>Note:</strong> vSAN add-on licenses are required when actual vSAN capacity exceeds the entitled TiB.
-    This cannot be determined from RVTools/LiveOptics data alone — verify against your actual vSAN capacity.
-    <br>Formula: Foundation Cores = Sockets × max(Cores per Socket, 16) &nbsp;|&nbsp;
-    Ref: <a href="https://knowledge.broadcom.com/external/article?legacyId=313548" target="_blank">KB 313548</a>
-  </div>
-</div>
 
-<div id="vcf9-section" hidden>
-  <div class="license-actions">
-    <h2>VCF 9 Readiness Report</h2>
-    <button id="vcf9-txt-btn" class="btn-outline">Download TXT</button>
-    <button id="vcf9-csv-btn" class="btn-outline">Download CSV</button>
+  <div id="tab-vcf9" class="tab-panel">
+    <div id="vcf9-section">
+      <div class="license-actions">
+        <h2>VCF 9 Readiness Report</h2>
+        <button id="vcf9-txt-btn" class="btn-outline">Download TXT</button>
+        <button id="vcf9-csv-btn" class="btn-outline">Download CSV</button>
+      </div>
+      <div id="vcf9-summary"></div>
+      <div class="license-table-wrapper">
+        <div id="vcf9-table-container"></div>
+      </div>
+      <div class="license-note">
+        Hosts are checked against the <a href="https://compatibilityguide.broadcom.com/" target="_blank">Broadcom Compatibility Guide</a>.
+        Vendor prefixes (Dell, HPE, Lenovo, ...) are stripped before matching.
+      </div>
+    </div>
   </div>
-  <div id="vcf9-summary"></div>
-  <div class="license-table-wrapper">
-    <div id="vcf9-table-container"></div>
-  </div>
-  <div class="license-note">
-    Hosts are checked against the <a href="https://compatibilityguide.broadcom.com/" target="_blank">Broadcom Compatibility Guide</a>.
-    Vendor prefixes (Dell, HPE, Lenovo, ...) are stripped before matching.
+
+  <div id="tab-license" class="tab-panel">
+    <div id="license-section">
+      <div class="license-actions">
+        <h2>VCF/VVF License Report</h2>
+        <button id="license-txt-btn" class="btn-outline">Download TXT</button>
+        <button id="license-csv-btn" class="btn-outline">Download CSV</button>
+      </div>
+      <div id="license-summary"></div>
+      <div class="license-table-wrapper">
+        <div id="license-table-container"></div>
+      </div>
+      <div class="license-note">
+        <strong>Note:</strong> vSAN add-on licenses are required when actual vSAN capacity exceeds the entitled TiB.
+        This cannot be determined from RVTools/LiveOptics data alone — verify against your actual vSAN capacity.
+        <br>Formula: Foundation Cores = Sockets × max(Cores per Socket, 16) &nbsp;|&nbsp;
+        Ref: <a href="https://knowledge.broadcom.com/external/article?legacyId=313548" target="_blank">KB 313548</a>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -875,9 +894,7 @@ function calculateLicensing(sites, deploymentType) {
 
 function renderLicenseReport() {
   const report = window.__licenseReport;
-  const section = document.getElementById('license-section');
-  if (!report) { section.hidden = true; return; }
-  section.hidden = false;
+  if (!report) return;
 
   // Summary
   const summary = document.getElementById('license-summary');
@@ -947,9 +964,7 @@ function buildVcf9Report(sites) {
 
 function renderVcf9Report() {
   const report = window.__vcf9Report;
-  const section = document.getElementById('vcf9-section');
-  if (!report) { section.hidden = true; return; }
-  section.hidden = false;
+  if (!report) return;
 
   // Summary
   const summary = document.getElementById('vcf9-summary');
@@ -1172,6 +1187,37 @@ document.getElementById('license-csv-btn').addEventListener('click', () => {
   URL.revokeObjectURL(a.href);
 });
 
+// ── Tab system ─────────────────────────────────────────────────────────────
+function buildTabBar(hasVcf9, hasLicense) {
+  const bar = document.getElementById('tab-bar');
+  bar.innerHTML = '';
+  const tabs = [{ id: 'tab-diagram', label: 'Diagram' }];
+  if (hasVcf9) tabs.push({ id: 'tab-vcf9', label: 'VCF 9 Readiness' });
+  if (hasLicense) tabs.push({ id: 'tab-license', label: 'License Report' });
+
+  tabs.forEach((t, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = t.label;
+    btn.setAttribute('data-tab', t.id);
+    btn.addEventListener('click', () => switchTab(t.id));
+    bar.appendChild(btn);
+  });
+
+  // Show/hide panels, activate first
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(tabs[0].id).classList.add('active');
+}
+
+function switchTab(panelId) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const btn = document.querySelector(`.tab-btn[data-tab="${panelId}"]`);
+  if (btn) btn.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+  if (panelId === 'tab-diagram' && window.renderDiagram) window.renderDiagram().catch(() => {});
+}
+
 async function generate() {
   if (!files.length) return;
   genBtn.disabled = true;
@@ -1210,15 +1256,14 @@ async function generate() {
 
     const doc = generateExcalidraw(sites, vcf9Enabled && !!vcf9Lookup);
     window.__excalidrawDoc = doc;
-    document.dispatchEvent(new CustomEvent('diagram-ready'));
 
     // VCF 9 Readiness Report
-    if (vcf9Enabled && vcf9Lookup) {
+    const hasVcf9 = vcf9Enabled && !!vcf9Lookup;
+    if (hasVcf9) {
       window.__vcf9Report = buildVcf9Report(sites);
       renderVcf9Report();
     } else {
       window.__vcf9Report = null;
-      document.getElementById('vcf9-section').hidden = true;
     }
 
     // License Calculator
@@ -1227,11 +1272,18 @@ async function generate() {
       const deploymentType = document.getElementById('license-type').value;
       window.__licenseReport = calculateLicensing(sites, deploymentType);
       renderLicenseReport();
-      document.getElementById('license-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } else {
       window.__licenseReport = null;
-      document.getElementById('license-section').hidden = true;
     }
+
+    // Build tab bar and show results
+    buildTabBar(hasVcf9, licenseEnabled);
+    const resultsSection = document.getElementById('results-section');
+    resultsSection.hidden = false;
+    resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // Trigger diagram render
+    document.dispatchEvent(new CustomEvent('diagram-ready'));
 
     setStatus('✓ Diagram ready — see preview below', 'ok');
   } catch (e) {
@@ -1314,13 +1366,10 @@ async function renderDiagram() {
     theme: excalidrawTheme(),
   }));
 }
+window.renderDiagram = renderDiagram;
 
 document.addEventListener('diagram-ready', () => {
-  const section = document.getElementById('preview-section');
-  section.hidden = false;
-  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
   renderDiagram().catch((e) => {
-    const status = document.getElementById('status');
     setStatus('Error loading preview: ' + e.message, 'err');
   });
 });
