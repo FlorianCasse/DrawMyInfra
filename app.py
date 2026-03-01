@@ -1,5 +1,5 @@
 """
-DrawMyInfra — VMware infrastructure → Excalidraw Generator
+InfraLens — VMware infrastructure → Excalidraw Generator
 Flask web app — single file, no templates directory needed.
 Supports RVTools and LiveOptics .xlsx exports.
 """
@@ -17,7 +17,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB upload limit
 
 # ─── Color Palette (up to 6 sites) ───────────────────────────────────────────
 PALETTES = [
-    {   # DrawMyInfra Teal — primary brand
+    {   # InfraLens Teal — primary brand
         "zone_bg":    "#E3F5F4", "zone_stroke": "#2DC4B8",
         "hdr_bg":     "#2DC4B8", "hdr_text":    "#FFFFFF",
         "cluster_bg": "#EAF8F7", "cluster_stroke": "#2DC4B8",
@@ -759,7 +759,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>DrawMyInfra</title>
+<title>InfraLens</title>
 <style>
   :root {
     --primary:     #2DC4B8;
@@ -887,7 +887,7 @@ HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <img src="/static/logo.png" alt="DrawMyInfra" class="logo-img"/>
+  <img src="/static/logo.png" alt="InfraLens" class="logo-img"/>
   <p class="subtitle">Upload <strong>RVTools</strong> or <strong>LiveOptics</strong> .xlsx exports — get a ready-to-open infrastructure diagram</p>
 </header>
 
@@ -1277,5 +1277,5 @@ def vcf9_txt():
 if __name__ == "__main__":
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-    print(f"Starting DrawMyInfra server on http://localhost:{port}")
+    print(f"Starting InfraLens server on http://localhost:{port}")
     app.run(debug=False, host="0.0.0.0", port=port)

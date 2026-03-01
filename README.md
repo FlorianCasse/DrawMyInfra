@@ -1,9 +1,9 @@
-# DrawMyInfra
+# InfraLens
 
 Convert VMware infrastructure exports into ready-to-open [Excalidraw](https://excalidraw.com) diagrams — directly in your browser, no server required.
 
-**Live app (production):** https://floriancasse.github.io/DrawMyInfra/
-**Dev preview:** https://floriancasse.github.io/DrawMyInfra/dev/
+**Live app (production):** https://floriancasse.github.io/InfraLens/
+**Dev preview:** https://floriancasse.github.io/InfraLens/dev/
 
 ---
 
@@ -64,7 +64,7 @@ Reference: [Broadcom KB 313548](https://knowledge.broadcom.com/external/article?
 
 ## Usage
 
-1. Open the [live app](https://floriancasse.github.io/DrawMyInfra) (or the [dev preview](https://floriancasse.github.io/DrawMyInfra/dev/))
+1. Open the [live app](https://floriancasse.github.io/InfraLens) (or the [dev preview](https://floriancasse.github.io/InfraLens/dev/))
 2. Drop one or more `.xlsx` files onto the upload area
 3. Optionally rename each site
 4. Optionally tick **Check VCF 9 Compatibility** to add Broadcom Compatibility Guide readiness indicators
@@ -107,8 +107,8 @@ A GitHub Actions workflow deploys both branches to GitHub Pages:
 
 | Branch | URL |
 |---|---|
-| `main` | https://floriancasse.github.io/DrawMyInfra/ |
-| `dev` | https://floriancasse.github.io/DrawMyInfra/dev/ |
+| `main` | https://floriancasse.github.io/InfraLens/ |
+| `dev` | https://floriancasse.github.io/InfraLens/dev/ |
 
 Every push to either branch triggers a rebuild.
 
