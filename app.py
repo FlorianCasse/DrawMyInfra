@@ -9,7 +9,6 @@ import json
 import os
 import uuid
 import re
-import urllib.request
 from flask import Flask, request, send_file, Response
 import pandas as pd
 
@@ -105,81 +104,40 @@ def fmt_pct(v):
         return str(v).strip() if v else "—"
 
 
-# ─── VCF 9 Compatibility (vSAN HCL) ──────────────────────────────────────────
-VENDOR_PATTERNS = [
-    (re.compile(r'PowerEdge|Dell|VRTX', re.I),              'Dell'),
-    (re.compile(r'ProLiant|Synergy|HPE|Edgeline', re.I),    'Hewlett Packard Enterprise'),
-    (re.compile(r'ThinkSystem|ThinkAgile|Lenovo', re.I),     'Lenovo'),
-    (re.compile(r'UCS[CS]\-|Cisco|HyperFlex', re.I),        'Cisco'),
-    (re.compile(r'PRIMERGY|Fujitsu', re.I),                  'Fujitsu'),
-    (re.compile(r'Hitachi', re.I),                           'Hitachi'),
-    (re.compile(r'Supermicro|SYS\-|Super\s*Server', re.I),  'Supermicro Computer, Inc'),
-    (re.compile(r'Quanta', re.I),                            'Quanta Cloud Technology (QCT)'),
-    (re.compile(r'ZTE', re.I),                               'ZTE'),
-    (re.compile(r'NEC', re.I),                               'NEC'),
-    (re.compile(r'xFusion', re.I),                           'xFusion'),
-]
-
+# ─── VCF 9 Compatibility (Broadcom Compatibility Guide) ──────────────────────
 _hcl_cache = None
+_VENDOR_PREFIX_RE = re.compile(
+    r'^(Dell\s+(Inc\.?\s*)?|HPE?\s+|Lenovo\s+|Cisco\s+|Fujitsu\s+)', re.I
+)
 
 
-def detect_vendor(model):
-    if not model:
-        return None
-    for pattern, vendor in VENDOR_PATTERNS:
-        if pattern.search(model):
-            return vendor
-    return None
-
-
-def fetch_hcl():
+def load_hcl():
     global _hcl_cache
     if _hcl_cache is not None:
         return _hcl_cache
-    url = 'https://vvs.broadcom.com/service/vsan/all.json'
-    req = urllib.request.Request(url, headers={'User-Agent': 'DrawMyInfra/1.0'})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        _hcl_cache = json.loads(resp.read().decode('utf-8'))
+    hcl_path = os.path.join(os.path.dirname(__file__), 'vcf9_hcl.json')
+    with open(hcl_path, 'r') as f:
+        _hcl_cache = json.load(f)
     return _hcl_cache
 
 
 def build_vcf9_lookup(hcl_data):
-    vendors_ctrl = set()
-    vendors_nic = set()
-    items = hcl_data.get('data', {}).get('results', None) or hcl_data.get('results', None) or hcl_data
-    if not isinstance(items, list):
-        return set()
+    return {entry['m'].strip().lower() for entry in hcl_data}
 
-    for entry in items:
-        vendor = entry.get('vcg_vendor_name', '') or entry.get('vendor', '')
-        releases = entry.get('releases', []) or entry.get('supported_releases', [])
-        has_esxi9 = False
-        for r in (releases if isinstance(releases, list) else []):
-            if isinstance(r, str):
-                if r.startswith('9.') or re.search(r'ESXi\s*9', r, re.I):
-                    has_esxi9 = True
-                    break
-            elif isinstance(r, dict) and r.get('version', '').startswith('9.'):
-                has_esxi9 = True
-                break
-        if not has_esxi9:
-            continue
 
-        cat = (entry.get('category', '') or entry.get('device_type', '')).lower()
-        if any(k in cat for k in ('controller', 'hba', 'raid', 'ahci')):
-            vendors_ctrl.add(vendor)
-        if any(k in cat for k in ('nic', 'network', 'ethernet', 'cna')):
-            vendors_nic.add(vendor)
-
-    return vendors_ctrl & vendors_nic
+def normalize_model(model):
+    return _VENDOR_PREFIX_RE.sub('', model).strip()
 
 
 def check_vcf9_compat(model, lookup):
-    vendor = detect_vendor(model)
-    if not vendor:
+    if not model:
         return {'status': 'unknown', 'label': '\u26A0\uFE0F VCF9 ?'}
-    if vendor in lookup:
+    norm = normalize_model(model).lower()
+    if norm in lookup:
         return {'status': 'compatible', 'label': '\u2705 VCF9 Ready'}
+    for hcl_model in lookup:
+        if norm in hcl_model or hcl_model in norm:
+            return {'status': 'compatible', 'label': '\u2705 VCF9 Ready'}
     return {'status': 'incompatible', 'label': '\u274C VCF9 N/A'}
 
 
@@ -500,7 +458,7 @@ def generate_excalidraw(sites, vcf9_enabled=False):
 
     # VCF9 legend
     if vcf9_enabled:
-        legend_text = "VCF 9 Compatibility\n\u2705 Ready \u2014 vendor in HCL\n\u274C N/A \u2014 vendor not in HCL\n\u26A0\uFE0F ? \u2014 vendor unknown"
+        legend_text = "VCF 9 Compatibility\n\u2705 Ready \u2014 model in HCL\n\u274C N/A \u2014 model not in HCL\n\u26A0\uFE0F ? \u2014 model unknown"
         legend_els = rect(uid(), x_cursor, CANVAS_Y, 220, 90,
                           bg="#FFF9E6", stroke="#D4A017",
                           text=legend_text, font_size=9,
@@ -835,7 +793,7 @@ def generate():
     vcf9_field = request.form.get('vcf9', '').lower()
     if vcf9_field in ('1', 'true', 'on', 'yes'):
         try:
-            hcl_data = fetch_hcl()
+            hcl_data = load_hcl()
             vcf9_lookup = build_vcf9_lookup(hcl_data)
             for site in sites:
                 for chosts in site["clusters"].values():

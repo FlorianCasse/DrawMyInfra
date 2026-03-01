@@ -252,79 +252,42 @@ function fmtPct(v) {
   return (v && String(v).trim()) ? String(v).trim() : '—';
 }
 
-// ── VCF 9 Compatibility (vSAN HCL) ──────────────────────────────────────────
-const VENDOR_PATTERNS = [
-  { pattern: /PowerEdge|Dell|VRTX/i,                    vendor: 'Dell' },
-  { pattern: /ProLiant|Synergy|HPE|Edgeline/i,          vendor: 'Hewlett Packard Enterprise' },
-  { pattern: /ThinkSystem|ThinkAgile|Lenovo/i,           vendor: 'Lenovo' },
-  { pattern: /UCS[CS]\-|Cisco|HyperFlex/i,              vendor: 'Cisco' },
-  { pattern: /PRIMERGY|Fujitsu/i,                        vendor: 'Fujitsu' },
-  { pattern: /Hitachi/i,                                 vendor: 'Hitachi' },
-  { pattern: /Supermicro|SYS\-|Super\s*Server/i,        vendor: 'Supermicro Computer, Inc' },
-  { pattern: /Quanta/i,                                  vendor: 'Quanta Cloud Technology (QCT)' },
-  { pattern: /ZTE/i,                                     vendor: 'ZTE' },
-  { pattern: /NEC/i,                                     vendor: 'NEC' },
-  { pattern: /xFusion/i,                                 vendor: 'xFusion' },
-];
-
-function detectVendor(model) {
-  if (!model) return null;
-  for (const { pattern, vendor } of VENDOR_PATTERNS) {
-    if (pattern.test(model)) return vendor;
-  }
-  return null;
-}
-
+// ── VCF 9 Compatibility (Broadcom Compatibility Guide) ──────────────────────
 let _hclCache = null;
 
 async function fetchHcl() {
   if (_hclCache) return _hclCache;
-  const url = 'https://vvs.broadcom.com/service/vsan/all.json';
-  try {
-    const res = await fetch(url);
-    if (res.ok) { _hclCache = await res.json(); return _hclCache; }
-  } catch (_) { /* CORS blocked — try proxy */ }
-  const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(url);
-  const res2 = await fetch(proxyUrl);
-  if (!res2.ok) throw new Error('Failed to fetch vSAN HCL');
-  _hclCache = await res2.json();
+  const res = await fetch('vcf9_hcl.json');
+  if (!res.ok) throw new Error('Failed to load VCF 9 compatibility data');
+  _hclCache = await res.json();
   return _hclCache;
 }
 
 function buildVcf9Lookup(hclData) {
-  const vendorsWithCtrl = new Set();
-  const vendorsWithNic  = new Set();
-  const items = hclData.data?.results || hclData.results || hclData;
-  if (!Array.isArray(items)) return new Set();
-
-  for (const entry of items) {
-    const vendor = entry.vcg_vendor_name || entry.vendor || '';
-    const releases = entry.releases || entry.supported_releases || [];
-    const hasEsxi9 = Array.isArray(releases) && releases.some(r =>
-      typeof r === 'string' ? /^9\./.test(r) || /ESXi\s*9/i.test(r)
-        : (r.version && /^9\./.test(r.version))
-    );
-    if (!hasEsxi9) continue;
-
-    const cat = (entry.category || entry.device_type || '').toLowerCase();
-    if (cat.includes('controller') || cat.includes('hba') || cat.includes('raid') || cat.includes('ahci'))
-      vendorsWithCtrl.add(vendor);
-    if (cat.includes('nic') || cat.includes('network') || cat.includes('ethernet') || cat.includes('cna'))
-      vendorsWithNic.add(vendor);
+  // Build a Set of normalised model strings for fast lookup
+  const models = new Set();
+  for (const entry of hclData) {
+    models.add(entry.m.trim().toLowerCase());
   }
+  return models;
+}
 
-  const ready = new Set();
-  for (const v of vendorsWithCtrl) {
-    if (vendorsWithNic.has(v)) ready.add(v);
-  }
-  return ready;
+function normalizeModel(model) {
+  // Strip common vendor prefixes that RVTools sometimes includes
+  return model.replace(/^(Dell\s+(Inc\.?\s*)?|HPE?\s+|Lenovo\s+|Cisco\s+|Fujitsu\s+)/i, '').trim();
 }
 
 function checkVcf9Compat(model, lookup) {
-  const vendor = detectVendor(model);
-  if (!vendor)            return { status: 'unknown',      label: '\u26A0\uFE0F VCF9 ?' };
-  if (lookup.has(vendor)) return { status: 'compatible',   label: '\u2705 VCF9 Ready' };
-  return                         { status: 'incompatible', label: '\u274C VCF9 N/A' };
+  if (!model) return { status: 'unknown', label: '\u26A0\uFE0F VCF9 ?' };
+  const norm = normalizeModel(model).toLowerCase();
+  // Exact match
+  if (lookup.has(norm)) return { status: 'compatible', label: '\u2705 VCF9 Ready' };
+  // Check if any HCL model is contained in the host model or vice-versa
+  for (const hclModel of lookup) {
+    if (norm.includes(hclModel) || hclModel.includes(norm))
+      return { status: 'compatible', label: '\u2705 VCF9 Ready' };
+  }
+  return { status: 'incompatible', label: '\u274C VCF9 N/A' };
 }
 
 let xlsxLoadPromise = null;
@@ -593,7 +556,7 @@ function generateExcalidraw(sites, vcf9Enabled) {
     const legendY = CANVAS_Y;
     const legendW = 220;
     const legendH = 90;
-    const legendText = 'VCF 9 Compatibility\n\u2705 Ready — vendor in HCL\n\u274C N/A — vendor not in HCL\n\u26A0\uFE0F ? — vendor unknown';
+    const legendText = 'VCF 9 Compatibility\n\u2705 Ready — model in HCL\n\u274C N/A — model not in HCL\n\u26A0\uFE0F ? — model unknown';
     elements.push(...makeRect(uid(), legendX, legendY, legendW, legendH,
       '#FFF9E6', '#D4A017', legendText, 9, false, '#4A4A00', 'middle', 8));
   }
@@ -751,11 +714,11 @@ async function generate() {
     let vcf9Lookup = null;
     if (vcf9Enabled) {
       try {
-        setStatus('Fetching vSAN HCL…', 'loading');
+        setStatus('Loading VCF 9 compatibility data…', 'loading');
         const hclData = await fetchHcl();
         vcf9Lookup = buildVcf9Lookup(hclData);
       } catch (e) {
-        setStatus('Warning: Could not fetch vSAN HCL — continuing without VCF9 check', 'err');
+        setStatus('Warning: Could not load VCF 9 data — continuing without VCF9 check', 'err');
         vcf9Lookup = null;
       }
     }
